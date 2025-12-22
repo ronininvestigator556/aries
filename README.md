@@ -66,6 +66,8 @@ Core capabilities already in the codebase include:
    - `/model <name>` — switch models.
    - `/workspace new <name>` — create a persistent workspace with transcripts and artifacts.
    - `/profile list` / `/profile use <name>` — view or apply YAML-defined behavior profiles.
+   - `/policy show` — inspect workspace-aware policy settings.
+   - `/policy explain <tool> <json_args>` — dry-run a tool policy decision.
    - `/help` — list commands.
    - `/clear` — reset conversation history.
    - `/exit` — quit.
@@ -80,6 +82,12 @@ Models that support function/tool calls can invoke the registered tools:
 
 Tool execution results are injected back into the conversation to inform follow-up model responses.
 Tools declare whether they mutate state and carry a risk classification; confirmation prompts honor those attributes when `tools.confirmation_required` is true, and all tool runs—including manual commands like `/search`—are filtered through the ToolPolicy allow/deny lists. Tools that emit artifacts (e.g., `write_file`) register explicit artifact hints in `artifacts/manifest.json`; legacy `metadata.path` is honored only for tools that declare `emits_artifacts`, and missing paths are logged instead of crashing.
+
+Policy inspection examples:
+```bash
+/policy show
+/policy explain write_file {"path":"notes.txt","content":"hello"}
+```
 
 ## Phase 2 golden path
 

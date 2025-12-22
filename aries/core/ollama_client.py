@@ -92,7 +92,7 @@ class OllamaClient:
             messages: List of message dictionaries.
             raw: Return the full Ollama response if True.
             **kwargs: Additional parameters for Ollama.
-            
+
         Returns:
             Complete response text or raw response.
             
@@ -104,6 +104,7 @@ class OllamaClient:
             response = await self.client.chat(
                 model=model,
                 messages=messages,
+                tools=tools,
                 **kwargs,
             )
             if raw:

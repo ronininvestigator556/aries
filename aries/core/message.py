@@ -27,9 +27,9 @@ class ToolCall:
 
 
 @dataclass
-class ToolResult:
-    """Represents the result of a tool execution."""
-    
+class ToolResultMessage:
+    """Represents a tool result as stored in conversation history."""
+
     tool_call_id: str
     content: str
     success: bool = True

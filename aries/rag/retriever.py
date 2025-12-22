@@ -5,8 +5,9 @@ Retrieves relevant document chunks from ChromaDB based on query similarity.
 """
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
+
+import chromadb
 
 from aries.config import RAGConfig
 from aries.core.ollama_client import OllamaClient
@@ -50,8 +51,14 @@ class Retriever:
         Returns:
             True if loaded successfully.
         """
-        # TODO: Implement ChromaDB collection loading
-        raise NotImplementedError("RAG retrieval not yet implemented")
+        client = chromadb.PersistentClient(path=str(self.config.indices_dir))
+        try:
+            self._collection = client.get_collection(name=name)
+        except Exception as exc:
+            raise FileNotFoundError(f"Index not found: {name}") from exc
+
+        self._current_index = name
+        return True
     
     async def retrieve(
         self,
@@ -67,10 +74,32 @@ class Retriever:
         Returns:
             List of retrieved chunks sorted by relevance.
         """
-        # TODO: Implement query embedding
-        # TODO: Implement similarity search
-        # TODO: Return formatted results
-        raise NotImplementedError("RAG retrieval not yet implemented")
+        if not self._collection:
+            raise FileNotFoundError("No index loaded")
+
+        top_k = top_k or self.config.top_k
+        embedding = await self.ollama.generate_embedding(query)
+        result = self._collection.query(
+            query_embeddings=[embedding],
+            n_results=top_k,
+        )
+
+        chunks: list[RetrievedChunk] = []
+        docs = result.get("documents", [[]])[0]
+        metadatas = result.get("metadatas", [[]])[0]
+        distances = result.get("distances", [[]])[0] if "distances" in result else []
+
+        for doc, meta, dist in zip(docs, metadatas, distances):
+            chunks.append(
+                RetrievedChunk(
+                    content=doc,
+                    source=str(meta.get("source")),
+                    score=float(dist) if dist is not None else 0.0,
+                    metadata=meta,
+                )
+            )
+
+        return chunks
     
     def unload(self) -> None:
         """Unload the current index."""

@@ -38,6 +38,13 @@ class ToolResultMessage:
 
 
 @dataclass
+class ToolResultMessage(ToolResult):
+    """Represents a tool result embedded in the conversation history."""
+    
+    name: str | None = None
+
+
+@dataclass
 class Message:
     """A single message in a conversation."""
     

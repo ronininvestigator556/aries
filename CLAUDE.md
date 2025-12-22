@@ -1,20 +1,20 @@
-# ARIES - AI Research & Investigation Enhancement System
+# ARIES - Local-First, Terminal-Native AI Workbench
 
 ## Project Overview
 
-Aries is a terminal-based AI assistant that provides a local-first alternative to cloud AI interfaces like Gemini. It connects to locally-running LLMs via Ollama, with integrated RAG capabilities, web search (SearXNG), file system tools, and full shell access.
+Aries is a **local-first, terminal-native AI workbench** that connects to locally running LLMs via Ollama. It includes RAG, web search (SearXNG), file system tools, and audited shell access. Aries is **domain-neutral** by design and focuses on research, synthesis, and tool-augmented reasoning with inspectable behavior.
 
-**Target User:** Solo power user running local AI models for research, investigation, and development tasks.
+**Target User:** Local-first operators who need transparent, policy-driven tooling for research and synthesis (no embedded domain semantics).
 
-**Platform:** Windows (primary), with future Linux/Mac compatibility.
+**Platform:** Cross-platform terminal experience with no cloud dependency in core.
 
 ## Core Design Principles
 
-1. **Terminal-First:** All interaction happens in the terminal. Rich TUI with streaming support.
-2. **Local-First:** No cloud dependencies for core functionality. Ollama for models, SearXNG for search.
-3. **Tool-Augmented:** The AI can read/write files, search the web, execute shell commands, and query RAG indices.
-4. **Command-Driven:** Slash commands (`/model`, `/rag`, `/prompt`, etc.) for configuration and mode switching.
-5. **Context-Aware:** RAG integration allows pointing to pre-indexed document directories for domain-specific knowledge.
+1. **Local-First:** Core works offline; networked tools are explicit opt-ins.
+2. **Terminal-First:** All interaction happens in the terminal with Rich + prompt-toolkit.
+3. **Inspectable:** Context injection, RAG citations, and tool executions are transparent and logged.
+4. **Policy-Driven:** Capabilities are governed by configuration (profiles, allowlists), not prompt hacks.
+5. **Composable:** Extensions land via providers/tools, not core rewrites; no domain semantics in core.
 
 ## Architecture
 
@@ -37,6 +37,14 @@ Aries is a terminal-based AI assistant that provides a local-first alternative t
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Phase 2 Focus (Roadmap Alignment)
+
+- Optional **workspaces & persistence** (transcripts, artifacts, indexes).
+- **Trustworthy RAG** with deterministic ingestion and stable citation handles.
+- **Tool policy & auditability**: allowlists, bounded execution, structured logs.
+- **Prompt profiles** as behavior contracts.
+- **Export & portability** of workspaces and artifacts.
+
 ## Tech Stack
 
 | Component | Technology | Notes |
@@ -51,6 +59,16 @@ Aries is a terminal-based AI assistant that provides a local-first alternative t
 | Web Search | SearXNG | Self-hosted, private |
 | Config | YAML + Pydantic | Type-safe configuration |
 | Shell | `subprocess` + `asyncio` | Async process management |
+
+## Collaboration Model
+
+Per `CONTRIBUTING.md`, ownership is split across collaborating agents:
+
+- **Codex:** Implementation and wiring.
+- **Claude Code:** Specs, tests, and docs.
+- **Gemini:** RAG and UX ergonomics.
+
+Keep changes aligned with the roadmap, issue templates, and inspectability requirements.
 
 ## Directory Structure
 

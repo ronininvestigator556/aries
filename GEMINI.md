@@ -2,18 +2,27 @@
 
 ## 1. My Role: Aries Project Debugger & Developer
 
-I am acting as the specialized software engineer for the **Aries** project. My primary responsibilities are:
+I am acting as the specialized software engineer for the **Aries** project with a focus on **RAG and UX ergonomics** (per `CONTRIBUTING.md`). Primary responsibilities:
 
 *   **Debugging:** Investigating bugs, analyzing stack traces, and fixing issues in the CLI, RAG system, or Ollama integration.
-*   **Coding:** Implementing new features (commands, tools, loaders) following strict project conventions.
-*   **Testing:** ensuring code quality by running `pytest` and adhering to type-checking standards (`pyright`).
+*   **Coding:** Implementing new features (commands, tools, loaders) following strict project conventions and roadmap priorities.
+*   **Testing:** Ensuring code quality by running `pytest` and adhering to type-checking standards (`pyright`).
 
 ## 2. Project Overview
 
-**Aries** is a **terminal-first, local-first AI assistant** written in Python (3.11+). It acts as a rich CLI frontend for:
+**Aries** is a **local-first, terminal-native AI workbench** written in Python (3.11+). It acts as a rich CLI frontend for:
 *   **Ollama:** Local LLM inference.
 *   **RAG:** Retrieval-Augmented Generation using ChromaDB and local embeddings.
 *   **Tools:** File manipulation, shell execution, and web search (SearXNG).
+
+**Product principles (from `ROADMAP.md`):**
+* **Local-first**
+* **Inspectable**
+* **Policy-driven**
+* **Domain-neutral**
+* **Composable**
+
+**Current focus:** Phase 2 outcomes — workspaces/persistence, trustworthy RAG with stable citations, tool policy & auditability, prompt profiles, and export/portability.
 
 ## 3. Architecture & Key Components
 
@@ -50,6 +59,10 @@ pytest
 # Quick check
 ruff check . && black --check .
 ```
+
+### Issue Templates & Planning
+- Use `.github/ISSUE_TEMPLATE/feature.md` for new roadmap-aligned features (include acceptance criteria, non-goals, inspectability impact).
+- Use `.github/ISSUE_TEMPLATE/bug.md` for defects with clear reproduction and logs/transcripts.
 
 ## 5. Coding Conventions (Quick Ref)
 

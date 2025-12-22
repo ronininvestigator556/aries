@@ -181,7 +181,10 @@ class Aries:
 
     def _requires_confirmation(self, tool: BaseTool) -> bool:
         """Determine whether a tool should require confirmation."""
-        return bool(tool.mutates_state)
+        risk = getattr(tool, "risk_level", "read")
+        if getattr(tool, "mutates_state", False):
+            return True
+        return risk in {"write", "exec"}
 
     def _sanitize_arguments(self, args: dict[str, Any]) -> dict[str, Any]:
         """Sanitize tool arguments for logging."""
@@ -565,10 +568,11 @@ class Aries:
 
     def _maybe_register_artifact(self, result: ToolResult, tool: BaseTool) -> None:
         registry = self.workspace.artifacts
-        if not registry or not result.metadata or not getattr(tool, "emits_artifacts", False):
+        if not registry or not getattr(tool, "emits_artifacts", False):
             return
 
-        artifact_meta = result.metadata.get("artifact")
+        metadata = result.metadata or {}
+        artifact_meta = metadata.get("artifact")
         hints: list[dict[str, Any]] = []
         if isinstance(artifact_meta, dict):
             hints.append({k: v for k, v in artifact_meta.items() if v is not None})
@@ -580,7 +584,7 @@ class Aries:
         if result.artifacts:
             hints.extend([h for h in result.artifacts if isinstance(h, dict)])
 
-        legacy_path = result.metadata.get("path")
+        legacy_path = metadata.get("path")
         if legacy_path:
             hints.append({"path": str(legacy_path)})
 

@@ -40,22 +40,18 @@ class ToolPolicy:
         return any(str(resolved).startswith(str(allowed)) for allowed in self.allowed_paths)
 
     def evaluate(self, tool: BaseTool, args: dict[str, Any]) -> PolicyDecision:
-        name = tool.name
         risk = getattr(tool, "risk_level", "read")
-        # Shell commands require explicit allow
-        if name == "execute_shell":
-            if not self.config.allow_shell:
-                return PolicyDecision(False, f"Shell execution disabled by policy (risk={risk})")
-            cwd = args.get("cwd")
-            if cwd and not self._path_allowed(cwd):
-                return PolicyDecision(False, f"Working directory not permitted (risk={risk})")
-        # Web search requires network allow
-        if name == "search_web" and not self.config.allow_network:
+        mutates_state = bool(getattr(tool, "mutates_state", False))
+
+        if getattr(tool, "requires_shell", False) and not self.config.allow_shell:
+            return PolicyDecision(False, f"Shell execution disabled by policy (risk={risk})")
+
+        if getattr(tool, "requires_network", False) and not self.config.allow_network:
             return PolicyDecision(False, f"Network tools disabled by policy (risk={risk})")
-        # File tools path checks
-        if name in {"read_file", "write_file", "list_directory", "read_image"}:
-            path = args.get("path")
-            if not self._path_allowed(path):
+
+        for path_param in getattr(tool, "path_params", ()):
+            if not self._path_allowed(args.get(path_param)):
                 return PolicyDecision(False, f"Path access denied by policy (risk={risk})")
-        classification = "mutating" if getattr(tool, "mutates_state", False) else "read"
+
+        classification = "mutating" if mutates_state else "read"
         return PolicyDecision(True, f"allowed:{risk}:{classification}")

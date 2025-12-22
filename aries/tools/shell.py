@@ -17,6 +17,8 @@ class ExecuteShellTool(BaseTool):
     description = "Execute a shell command and return the output"
     mutates_state = True
     risk_level = "exec"
+    requires_shell = True
+    path_params = ("cwd",)
     
     @property
     def parameters(self) -> dict[str, Any]:

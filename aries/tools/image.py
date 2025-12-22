@@ -18,6 +18,7 @@ class ReadImageTool(BaseTool):
     name = "read_image"
     description = "Load an image file from disk and return a base64-encoded string"
     risk_level = "read"
+    path_params = ("path",)
     
     @property
     def parameters(self) -> dict[str, Any]:

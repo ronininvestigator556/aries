@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class OllamaConfig(BaseModel):
@@ -57,6 +57,14 @@ class TokensConfig(BaseModel):
     )
     encoding: str = "cl100k_base"
     approx_chars_per_token: int = Field(default=4, ge=1)
+
+    @field_validator("mode")
+    @classmethod
+    def _normalize_mode(cls, value: str) -> str:
+        normalized = (value or "approx").lower()
+        if normalized not in {"tiktoken", "approx", "disabled"}:
+            return "approx"
+        return normalized
 
 
 class RAGConfig(BaseModel):

@@ -4,7 +4,7 @@ Base tool class for Aries tools.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass
@@ -25,7 +25,10 @@ class BaseTool(ABC):
     description: str = ""
     mutates_state: bool = False
     emits_artifacts: bool = False
-    risk_level: str = "read"
+    risk_level: Literal["read", "write", "exec"] = "read"
+    requires_network: bool = False
+    requires_shell: bool = False
+    path_params: tuple[str, ...] = ()
     
     @property
     @abstractmethod

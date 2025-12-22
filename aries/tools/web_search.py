@@ -15,6 +15,7 @@ class WebSearchTool(BaseTool):
     name = "search_web"
     description = "Search the web using DuckDuckGo"
     risk_level = "read"
+    requires_network = True
 
     @property
     def parameters(self) -> dict[str, Any]:

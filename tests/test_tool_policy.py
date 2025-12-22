@@ -6,6 +6,7 @@ from aries.cli import Aries
 from aries.commands.search import SearchCommand
 from aries.config import Config
 from aries.core.message import ToolCall
+from aries.tools.base import BaseTool, ToolResult
 
 
 def _bootstrap_config(tmp_path: Path) -> Config:
@@ -98,3 +99,34 @@ def test_read_only_tool_skips_confirmation(tmp_path: Path) -> None:
     app = Aries(config)
 
     assert not app._requires_confirmation(app.tool_map["read_file"])
+
+
+class _NetworkOnlyTool(BaseTool):
+    name = "custom_net"
+    description = "uses network but no shell"
+    requires_network = True
+
+    @property
+    def parameters(self) -> dict[str, object]:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs: object) -> ToolResult:
+        return ToolResult(success=True, content="ok")
+
+
+@pytest.mark.anyio
+async def test_attribute_based_policy_blocks_network_tools(tmp_path: Path) -> None:
+    config = _bootstrap_config(tmp_path)
+    config.tools.allow_network = False
+    config.tools.confirmation_required = False
+    app = Aries(config)
+
+    tool = _NetworkOnlyTool()
+    result, audit = await app._run_tool(
+        tool,
+        ToolCall(id="net-1", name=tool.name, arguments={}),
+    )
+
+    assert not result.success
+    assert audit["decision"] == "policy_denied"
+    assert result.error and "Network tools disabled by policy" in result.error

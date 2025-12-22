@@ -2,23 +2,24 @@
 
 Aries is a terminal-first AI assistant that connects to locally running LLMs via **Ollama**. It ships with command-driven controls, streaming console output, and tool integrations for files, shell commands, and basic vision image loading. The project prioritizes local-first workflows for research and investigation tasks without relying on cloud services.
 
-## Current state (Phase 1)
+## Current state (Phase 2 in progress)
 
-The codebase implements the core Minimum Viable Product:
+The codebase now includes the Phase 1 MVP plus the first Phase 2 capabilities:
 
 - **CLI app**: `python -m aries` starts the Rich-powered console loop with prompt-toolkit input and command routing.
 - **Ollama integration**: Lists models, switches active models, and streams chat responses.
-- **Commands**: `/model`, `/help`, `/clear`, `/exit` are available; additional commands from later phases (e.g., RAG/search) are not yet implemented.
+- **Commands**: `/model`, `/help`, `/clear`, `/exit`, plus Phase 2 `/rag` (index/select) and `/search` (SearXNG web search).
 - **Conversation management**: Tracks history, tool calls/results, and prunes context by message count and token budget.
-- **Tools**: File read/write/list, shell execution, and image loading for vision models are registered for model tool-calling.
+- **Tools**: File read/write/list, shell execution, image loading for vision models, and SearXNG web search are registered for model tool-calling.
 - **Configuration**: YAML-backed config with defaults for Ollama, UI, tools, prompts, and conversation limits.
-- **Tests**: Automated coverage for configuration, conversation behavior, Ollama client stubs, and all Phase 1 tools (`pytest`).
+- **RAG (early)**: Text/Markdown/PDF/EPUB loaders, token-aware chunking, ChromaDB indexing, Ollama embeddings, `/rag` command to index/select, and automatic context injection on chat when an index is active.
+- **Tests**: Automated coverage for configuration, conversation behavior, Ollama client stubs, tools, chunker, and RAG indexing/retrieval (`pytest`).
 
 ### Not yet implemented (future phases)
 
-- RAG indexing/retrieval, web search, and advanced TUI layout.
-- Additional commands (`/rag`, `/search`, `/prompt`, etc.) and full tool/result rendering beyond the basics.
-- Robust prompt library management and persistence for conversation logs.
+- Advanced TUI layout, richer prompt management, and conversation persistence.
+- Additional RAG features (multi-format chunking strategies, better metadata, scoring).
+- Further web search/result formatting and multi-tool orchestration.
 
 ## Quick start
 

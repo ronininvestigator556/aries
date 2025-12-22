@@ -31,6 +31,9 @@ def patch_tiktoken(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeEncoder:
         def encode(self, text: str) -> list[int]:
             return list(text.encode("utf-8"))
+        
+        def decode(self, tokens: list[int]) -> str:
+            return bytes(tokens).decode("utf-8")
 
     monkeypatch.setattr(conversation_module.tiktoken, "get_encoding", lambda _: _FakeEncoder())
     monkeypatch.setattr(

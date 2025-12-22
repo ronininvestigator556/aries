@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import chromadb
-from chromadb.utils import embedding_functions
 
 from aries.config import RAGConfig
 from aries.exceptions import DocumentLoadError, IndexError
 from aries.core.ollama_client import OllamaClient
+from aries.rag.chunker import TextChunker
 from aries.rag.loaders import LOADERS, BaseLoader, Document
 
 
@@ -33,6 +33,10 @@ class Indexer:
         self.config = config
         self.ollama = ollama
         self._collection = None
+        self._chunker = TextChunker(
+            chunk_size=config.chunk_size,
+            chunk_overlap=config.chunk_overlap,
+        )
     
     async def index_directory(
         self,
@@ -60,14 +64,32 @@ class Indexer:
             client.delete_collection(name)
 
         collection = client.get_or_create_collection(name=name)
-        documents, metadatas, ids = await self._load_documents_from_dir(directory)
+        documents = await self._load_documents_from_dir(directory)
+
+        chunk_texts: list[str] = []
+        metadatas: list[dict[str, Any]] = []
+        ids: list[str] = []
+
+        for doc in documents:
+            chunks = self._chunker.chunk(doc.content)
+            if not chunks:
+                continue
+            for chunk in chunks:
+                chunk_texts.append(chunk.content)
+                meta = dict(doc.metadata)
+                meta["source"] = doc.source
+                meta["chunk_id"] = chunk.chunk_id
+                meta["tokens"] = chunk.token_count
+                metadatas.append(meta)
+                ids.append(f"{doc.source}#chunk={chunk.chunk_id}")
+
         embeddings = [
-            await self.ollama.generate_embedding(doc)
-            for doc in documents
+            await self.ollama.generate_embedding(text)
+            for text in chunk_texts
         ]
 
         collection.upsert(
-            documents=documents,
+            documents=chunk_texts,
             embeddings=embeddings,
             metadatas=metadatas,
             ids=ids,
@@ -106,13 +128,9 @@ class Indexer:
             return []
         return [d.name for d in indices_dir.iterdir() if d.is_dir()]
 
-    async def _load_documents_from_dir(
-        self, directory: Path
-    ) -> tuple[list[str], list[dict[str, Any]], list[str]]:
+    async def _load_documents_from_dir(self, directory: Path) -> list[Document]:
         """Load supported documents from a directory."""
-        docs: list[str] = []
-        metadatas: list[dict[str, Any]] = []
-        ids: list[str] = []
+        documents: list[Document] = []
 
         loaders: list[BaseLoader] = [loader() for loader in LOADERS]
         supported_ext = {ext for loader in loaders for ext in loader.extensions}
@@ -126,18 +144,13 @@ class Indexer:
                 continue
 
             try:
-                documents = await loader.load(file_path)
+                loaded = await loader.load(file_path)
             except DocumentLoadError:
                 continue
 
-            for idx, doc in enumerate(documents):
-                docs.append(doc.content)
-                meta = dict(doc.metadata)
-                meta["source"] = doc.source
-                metadatas.append(meta)
-                ids.append(f"{file_path}-{idx}")
+            documents.extend(loaded)
 
-        return docs, metadatas, ids
+        return documents
 
     def _get_client(self) -> chromadb.ClientAPI:
         """Create a ChromaDB client using configured indices directory."""

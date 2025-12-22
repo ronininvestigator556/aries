@@ -48,6 +48,7 @@ Core capabilities already in the codebase include:
 2. **Configure Ollama**
    - Ensure `ollama serve` is running locally.
    - Update `config.yaml` (or copy `config.example.yaml`) with your Ollama host and default model.
+   - Create a profile YAML under `profiles/` (e.g., `profiles/default.yaml`) to set the system prompt and optional tool policy. Aries will fall back to `prompts/default.md` for legacy configs and emit a warning.
 
 3. **(Optional) Setup Search**
    - Aries uses SearXNG for web search. You can run it easily with Docker:
@@ -78,6 +79,18 @@ Models that support function/tool calls can invoke the registered tools:
 - `read_image` (returns base64 for vision models)
 
 Tool execution results are injected back into the conversation to inform follow-up model responses.
+Mutating tools (`write_file`, `execute_shell`) require confirmation when `tools.confirmation_required` is true, and all tool runs are filtered through the ToolPolicy allow/deny lists. Tools that produce files return artifact hints so the active workspace records them in `artifacts/manifest.json` (missing files are logged instead of crashing).
+
+## Phase 2 golden path
+
+Follow this minimal flow to exercise the hardened features:
+
+1. Start Aries with a config that points `workspace.root` and `profiles.directory` somewhere writable.
+2. Create a profile file (`profiles/default.yaml`) with a `system_prompt:` stanza, then run `/profile use default` to activate it (legacy `prompts/default.md` still works with a warning).
+3. Create or open a workspace: `/workspace new demo` (indexes/artifacts/transcripts live under this root).
+4. Add RAG context as needed: `/rag index add <path>` and `/rag select demo`.
+5. Ask the model to run a tool (e.g., write a note); confirm mutating tool calls when prompted.
+6. Inspect the transcript (`workspaces/<name>/transcripts/transcript.ndjson`) and artifact manifest (`artifacts/manifest.json`) to verify the run.
 
 ## Configuration overview
 
@@ -85,11 +98,11 @@ Key sections in `config.yaml`:
 
 - `ollama`: host, default model, embedding model, timeout.
 - `ui`: streaming toggle and history display limits.
-- `tools`: shell timeout, max file size, allowed extensions, path allow/deny lists, and network/shell enablement.
-- `workspace`: persistence root, default workspace, and directory names for transcripts/artifacts/indexes.
-- `profiles`: profile directory and default profile name.
+- `tools`: shell timeout, max file size, allowed extensions, path allow/deny lists, `allow_shell`, `allow_network`, and `confirmation_required` for mutating tools.
+- `workspace`: persistence root, default workspace, and directory names for transcripts/artifacts/indexes (artifact manifests live under `artifacts/manifest.json`).
+- `profiles`: profile directory and default profile name (primary behavior control).
 - `conversation`: max context tokens and message count for pruning.
-- `prompts`: directory and default prompt name.
+- `prompts`: directory and default prompt name (legacy fallback; Aries will migrate `prompts.default` to `profiles.default` with a warning).
 
 You can regenerate a default config snapshot via:
 ```bash

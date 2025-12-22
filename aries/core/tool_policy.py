@@ -52,9 +52,8 @@ class ToolPolicy:
         if name == "search_web" and not self.config.allow_network:
             return PolicyDecision(False, "Network tools disabled by policy")
         # File tools path checks
-        if name in {"read_file", "write_file", "list_directory"}:
+        if name in {"read_file", "write_file", "list_directory", "read_image"}:
             path = args.get("path")
             if not self._path_allowed(path):
                 return PolicyDecision(False, "Path access denied by policy")
         return PolicyDecision(True, "allowed")
-

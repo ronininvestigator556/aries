@@ -2,6 +2,7 @@
 File system tools for Aries.
 """
 
+import mimetypes
 import os
 from pathlib import Path
 from typing import Any
@@ -136,10 +137,21 @@ class WriteFileTool(BaseTool):
             async with aiofiles.open(file_path, file_mode, encoding="utf-8") as f:
                 await f.write(content)
             
+            mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
             return ToolResult(
                 success=True,
                 content=f"Successfully wrote to {path}",
-                metadata={"path": str(file_path), "bytes_written": len(content)},
+                metadata={
+                    "path": str(file_path),
+                    "bytes_written": len(content),
+                    "artifact": {
+                        "path": str(file_path),
+                        "type": "file",
+                        "name": file_path.name,
+                        "description": "File created by write_file",
+                        "mime": mime_type,
+                    },
+                },
             )
         except Exception as e:
             return ToolResult(

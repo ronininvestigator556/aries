@@ -7,6 +7,8 @@ Uses Pydantic for type-safe configuration with YAML file support.
 from pathlib import Path
 from typing import Any
 
+import warnings
+
 import yaml
 from pydantic import BaseModel, Field
 
@@ -131,8 +133,13 @@ class Config(BaseModel):
             raise FileNotFoundError(f"Config file not found: {path}")
         
         with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        
+            raw_data = yaml.safe_load(f) or {}
+
+        data, migration_warnings = migrate_config_data(raw_data)
+
+        for message in migration_warnings:
+            warnings.warn(message, stacklevel=2)
+
         return cls.model_validate(data)
     
     def save(self, path: Path | str) -> None:
@@ -208,3 +215,36 @@ def get_default_config_yaml() -> str:
         default_flow_style=False,
         sort_keys=False,
     )
+
+
+def migrate_config_data(data: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Apply backward-compatible migrations to configuration data.
+
+    Args:
+        data: Raw configuration dictionary from YAML.
+
+    Returns:
+        Tuple of (migrated data, warnings emitted during migration).
+    """
+    warnings: list[str] = []
+    migrated = dict(data)
+    prompts_cfg = migrated.get("prompts") or {}
+    profiles_cfg = migrated.get("profiles") or {}
+
+    # If profiles.default is missing but prompts.default exists, map it over.
+    if "default" not in profiles_cfg and "default" in prompts_cfg:
+        profiles_cfg["default"] = prompts_cfg["default"]
+        warnings.append(
+            "Detected legacy prompts.default configuration; using it for profiles.default. "
+            "Please update your config to use profiles as the default selector."
+        )
+
+    # Ensure a default profile exists, falling back to a safe built-in name.
+    if "default" not in profiles_cfg:
+        profiles_cfg["default"] = "researcher"
+        warnings.append(
+            "No default profile configured; falling back to the built-in 'researcher' profile."
+        )
+
+    migrated["profiles"] = profiles_cfg
+    return migrated, warnings

@@ -54,6 +54,14 @@ class ToolsConfig(BaseModel):
     allowed_extensions: list[str] = Field(default_factory=lambda: ["*"])
 
 
+class ConversationConfig(BaseModel):
+    """Conversation and context window settings."""
+    
+    max_context_tokens: int = Field(default=4096, ge=512)
+    max_messages: int = Field(default=100, ge=1)
+    encoding: str = "cl100k_base"
+
+
 class PromptsConfig(BaseModel):
     """System prompts settings."""
     
@@ -70,6 +78,7 @@ class Config(BaseModel):
     rag: RAGConfig = Field(default_factory=RAGConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
 
     @classmethod

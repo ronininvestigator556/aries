@@ -7,14 +7,18 @@ such as reading files, searching the web, or executing shell commands.
 
 from aries.tools.base import BaseTool, ToolResult
 from aries.tools.filesystem import ReadFileTool, WriteFileTool, ListDirectoryTool
+from aries.tools.image import ReadImageTool
 from aries.tools.shell import ExecuteShellTool
+from aries.tools.web_search import WebSearchTool
 
 # Tool registry
 TOOLS: dict[str, type[BaseTool]] = {
     "read_file": ReadFileTool,
     "write_file": WriteFileTool,
     "list_directory": ListDirectoryTool,
+    "read_image": ReadImageTool,
     "execute_shell": ExecuteShellTool,
+    "search_web": WebSearchTool,
 }
 
 

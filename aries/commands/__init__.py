@@ -7,16 +7,19 @@ Commands are slash-prefixed actions like /model, /rag, /help, etc.
 from aries.commands.base import BaseCommand
 from aries.commands.model import ModelCommand
 from aries.commands.clear import ClearCommand
-from aries.commands.help import HelpCommand
 from aries.commands.exit import ExitCommand
+from aries.commands.rag import RAGCommand
+from aries.commands.search import SearchCommand
 
-# Command registry
-COMMANDS: dict[str, type[BaseCommand]] = {
+# Command registry. The help command is resolved lazily to avoid circular import.
+COMMANDS: dict[str, type[BaseCommand] | None] = {
     "model": ModelCommand,
     "clear": ClearCommand,
-    "help": HelpCommand,
+    "help": None,
     "exit": ExitCommand,
     "quit": ExitCommand,  # Alias
+    "rag": RAGCommand,
+    "search": SearchCommand,
 }
 
 
@@ -41,7 +44,12 @@ def get_command(name: str) -> BaseCommand | None:
     Returns:
         Command instance or None if not found.
     """
-    cmd_class = COMMANDS.get(name.lower())
+    name_lower = name.lower()
+    if name_lower == "help":
+        from aries.commands.help import HelpCommand  # Local import to avoid circular
+        return HelpCommand()
+
+    cmd_class = COMMANDS.get(name_lower)
     if cmd_class is None:
         return None
     return cmd_class()
@@ -57,11 +65,19 @@ def get_all_commands() -> dict[str, str]:
     seen_classes = set()
     
     for name, cmd_class in COMMANDS.items():
+        # Resolve help lazily
+        if name == "help":
+            from aries.commands.help import HelpCommand  # Local import
+            instance = HelpCommand()
+            result[name] = instance.description
+            continue
+
+        if cmd_class is None:
+            continue
         # Skip aliases (same class)
         if cmd_class in seen_classes:
             continue
         seen_classes.add(cmd_class)
-        
         instance = cmd_class()
         result[name] = instance.description
     

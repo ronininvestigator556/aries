@@ -37,14 +37,22 @@ class ToolResult:
 
 
 @dataclass
+class ToolResultMessage(ToolResult):
+    """Represents a tool result embedded in the conversation history."""
+    
+    name: str | None = None
+
+
+@dataclass
 class Message:
     """A single message in a conversation."""
     
     role: Role
     content: str
     timestamp: datetime = field(default_factory=datetime.now)
+    tool_call_id: str | None = None
     tool_calls: list[ToolCall] | None = None
-    tool_results: list[ToolResult] | None = None
+    tool_results: list[ToolResultMessage] | None = None
     images: list[str] | None = None  # Base64-encoded images for vision models
     
     def to_ollama_format(self) -> dict[str, Any]:
@@ -60,6 +68,22 @@ class Message:
         
         if self.images:
             msg["images"] = self.images
+        
+        if self.tool_calls:
+            msg["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": call.arguments,
+                    },
+                }
+                for call in self.tool_calls
+            ]
+        
+        if self.tool_call_id:
+            msg["tool_call_id"] = self.tool_call_id
         
         return msg
     
@@ -77,16 +101,21 @@ class Message:
         return cls(role=Role.USER, content=content, images=images)
     
     @classmethod
-    def assistant(cls, content: str) -> "Message":
+    def assistant(
+        cls,
+        content: str,
+        tool_calls: list[ToolCall] | None = None,
+    ) -> "Message":
         """Create an assistant message.
         
         Args:
             content: Message content.
+            tool_calls: Optional tool calls requested by assistant.
             
         Returns:
             New Message instance.
         """
-        return cls(role=Role.ASSISTANT, content=content)
+        return cls(role=Role.ASSISTANT, content=content, tool_calls=tool_calls)
     
     @classmethod
     def system(cls, content: str) -> "Message":

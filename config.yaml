@@ -21,6 +21,19 @@ rag:
   top_k: 5
   indices_dir: "./indices"
 
+workspace:
+  root: "./workspaces"
+  default: null
+  persist_by_default: false
+  transcript_dirname: "transcripts"
+  artifact_dirname: "artifacts"
+  indexes_dirname: "indexes"
+  manifest_name: "workspace.json"
+
+profiles:
+  directory: "./profiles"
+  default: "default"
+
 # UI settings
 ui:
   theme: "dark"
@@ -34,6 +47,12 @@ tools:
   max_file_size_mb: 10
   allowed_extensions:
     - "*"
+  allowed_paths:
+    - "."
+  denied_paths: []
+  allow_shell: false
+  allow_network: false
+  confirmation_required: true
 
 # Conversation context settings
 conversation:

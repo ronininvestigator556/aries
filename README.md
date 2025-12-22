@@ -23,7 +23,7 @@ Core capabilities already in the codebase include:
 
 - **CLI app**: `python -m aries` launches the Rich-powered console loop with prompt-toolkit input and command routing.
 - **Ollama integration**: Lists models, switches active models, and streams chat responses.
-- **Commands**: `/model`, `/help`, `/clear`, `/exit`, `/rag` (index/select), and `/search` (SearXNG web search).
+- **Commands**: `/model`, `/help`, `/clear`, `/exit`, `/rag` (index/select/inspect), `/workspace` (new/open/list/export/import), `/profile` (list/use/show), and `/search` (SearXNG web search).
 - **Conversation management**: Tracks history, tool calls/results, and prunes context by message count and token budget.
 - **Tools**: File read/write/list, shell execution, image loading for vision models, and SearXNG web search with audit-friendly logging expectations.
 - **Configuration**: YAML-backed config with defaults for Ollama, UI, tools, prompts, and conversation limits.
@@ -32,7 +32,7 @@ Core capabilities already in the codebase include:
 
 ### Not yet implemented (future phases)
 
-- Advanced TUI layout, richer prompt management, and conversation persistence.
+- Advanced TUI layout and richer prompt management UX.
 - Additional RAG features (multi-format chunking strategies, better metadata, scoring).
 - Further web search/result formatting and multi-tool orchestration.
 - MCP (Model Context Protocol) provider layer and bounded planner per the roadmap.
@@ -63,6 +63,8 @@ Core capabilities already in the codebase include:
 5. **Use commands**
    - `/model list` — show available models.
    - `/model <name>` — switch models.
+   - `/workspace new <name>` — create a persistent workspace with transcripts and artifacts.
+   - `/profile list` / `/profile use <name>` — view or apply YAML-defined behavior profiles.
    - `/help` — list commands.
    - `/clear` — reset conversation history.
    - `/exit` — quit.
@@ -83,7 +85,9 @@ Key sections in `config.yaml`:
 
 - `ollama`: host, default model, embedding model, timeout.
 - `ui`: streaming toggle and history display limits.
-- `tools`: shell timeout, max file size, allowed extensions.
+- `tools`: shell timeout, max file size, allowed extensions, path allow/deny lists, and network/shell enablement.
+- `workspace`: persistence root, default workspace, and directory names for transcripts/artifacts/indexes.
+- `profiles`: profile directory and default profile name.
 - `conversation`: max context tokens and message count for pruning.
 - `prompts`: directory and default prompt name.
 

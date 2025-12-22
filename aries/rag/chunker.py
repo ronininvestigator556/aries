@@ -17,6 +17,8 @@ class Chunk:
     content: str
     token_count: int
     chunk_id: int
+    start_offset: int
+    end_offset: int
 
 
 class TextChunker:
@@ -53,6 +55,8 @@ class TextChunker:
                     content=content,
                     token_count=len(window),
                     chunk_id=idx,
+                    start_offset=start,
+                    end_offset=min(start + len(window), len(tokens)),
                 )
             )
         return chunks

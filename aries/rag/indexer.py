@@ -12,6 +12,8 @@ try:
 except ImportError:
     chromadb = None
 
+import hashlib
+
 from aries.config import RAGConfig
 from aries.exceptions import DocumentLoadError, IndexError
 from aries.core.ollama_client import OllamaClient
@@ -78,11 +80,19 @@ class Indexer:
             if not chunks:
                 continue
             for chunk in chunks:
+                chunk_hash = hashlib.sha256(chunk.content.encode("utf-8")).hexdigest()
                 chunk_texts.append(chunk.content)
                 meta = dict(doc.metadata)
                 meta["source"] = doc.source
                 meta["chunk_id"] = chunk.chunk_id
                 meta["tokens"] = chunk.token_count
+                meta["start_offset"] = chunk.start_offset
+                meta["end_offset"] = chunk.end_offset
+                meta["hash"] = chunk_hash
+                embedding_model = getattr(
+                    getattr(self.ollama, "config", None), "embedding_model", None
+                )
+                meta["embedding_model"] = embedding_model or "unknown"
                 metadatas.append(meta)
                 ids.append(f"{doc.source}#chunk={chunk.chunk_id}")
 

@@ -3,6 +3,7 @@ EPUB loader for RAG using ebooklib.
 """
 
 from pathlib import Path
+from datetime import datetime
 
 import ebooklib
 from ebooklib import epub
@@ -31,7 +32,14 @@ class EPUBLoader(BaseLoader):
                 Document(
                     content=text,
                     source=f"{path}#item={idx}",
-                    metadata={"name": path.name, "item_index": idx},
+                    metadata={
+                        "name": path.name,
+                        "item_index": idx,
+                        "source_path": str(path),
+                        "content_type": "application/epub+zip",
+                        "last_modified": datetime.utcfromtimestamp(path.stat().st_mtime).isoformat()
+                        + "Z",
+                    },
                 )
             )
         if not documents:

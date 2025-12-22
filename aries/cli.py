@@ -9,6 +9,8 @@ This module handles:
 """
 
 import asyncio
+import time
+import uuid
 from pathlib import Path
 from typing import Iterable
 
@@ -19,6 +21,9 @@ from aries.config import Config, load_config
 from aries.core.conversation import Conversation
 from aries.core.message import ToolCall
 from aries.core.ollama_client import OllamaClient
+from aries.core.tool_policy import ToolPolicy
+from aries.core.profile import ProfileManager
+from aries.core.workspace import TranscriptEntry, WorkspaceManager
 from aries.exceptions import AriesError
 from aries.rag.indexer import Indexer
 from aries.rag.retriever import Retriever
@@ -51,12 +56,29 @@ class Aries:
         self.running = True
         self.current_model: str = config.ollama.default_model
         self.current_rag: str | None = None
-        self.current_prompt: str = config.prompts.default
+        self.current_prompt: str = config.profiles.default
         self.tools: list[BaseTool] = get_all_tools()
         self.tool_definitions = [tool.to_ollama_format() for tool in self.tools]
         self.tool_map: dict[str, BaseTool] = {tool.name: tool for tool in self.tools}
         self.indexer = Indexer(config.rag, self.ollama)
         self.retriever = Retriever(config.rag, self.ollama)
+        self.profiles = ProfileManager(config.profiles.directory)
+        self.workspace = WorkspaceManager(config.workspace)
+        self.tool_policy = ToolPolicy(config.tools)
+        self.conversation_id = str(uuid.uuid4())
+        try:
+            default_profile = self.profiles.load(self.current_prompt)
+            if default_profile.system_prompt:
+                self.conversation.set_system_prompt(default_profile.system_prompt)
+        except FileNotFoundError:
+            pass
+        if config.workspace.persist_by_default and config.workspace.default:
+            try:
+                self.workspace.open(config.workspace.default)
+                self._apply_workspace_index_path()
+            except FileNotFoundError:
+                self.workspace.new(config.workspace.default)
+                self._apply_workspace_index_path()
 
     def _load_system_prompt(self) -> str | None:
         """Load the configured default system prompt if available."""
@@ -145,7 +167,8 @@ class Aries:
         Args:
             message: User's chat message.
         """
-        self.conversation.add_user_message(message)
+        msg = self.conversation.add_user_message(message)
+        self._log_transcript("user", message, msg_id=str(uuid.uuid4()))
         await self._run_assistant()
     
     async def _run_assistant(self) -> None:
@@ -188,6 +211,12 @@ class Aries:
                     message_payload.get("content", ""),
                     tool_calls=tool_calls,
                 )
+                self._log_transcript(
+                    "assistant",
+                    message_payload.get("content", "") or "",
+                    msg_id=str(uuid.uuid4()),
+                    extra={"tool_calls": tool_calls_raw},
+                )
                 await self._execute_tool_calls(tool_calls)
                 continue
 
@@ -199,9 +228,35 @@ class Aries:
     async def _retrieve_context(self, query: str):
         """Fetch RAG context if an index is active."""
         try:
-            return await self.retriever.retrieve(query)
+            chunks = await self.retriever.retrieve(query)
+            handles = self.retriever.last_handles
+            self._log_transcript(
+                "system",
+                f"Retrieved {len(chunks)} chunks",
+                msg_id=str(uuid.uuid4()),
+                extra={
+                    "tool_name": "rag_retrieve",
+                    "status": "success",
+                    "query": query,
+                    "index": self.retriever.current_index,
+                    "returned_handles": handles,
+                    "top_k": self.retriever.config.top_k,
+                },
+            )
+            return chunks
         except Exception as exc:
             display_error(f"RAG retrieval failed: {exc}")
+            self._log_transcript(
+                "system",
+                "RAG retrieval failed",
+                msg_id=str(uuid.uuid4()),
+                extra={
+                    "tool_name": "rag_retrieve",
+                    "status": "fail",
+                    "error": str(exc),
+                    "query": query,
+                },
+            )
             return []
     
     async def _execute_tool_calls(self, tool_calls: Iterable[ToolCall]) -> None:
@@ -220,11 +275,23 @@ class Aries:
                     tool_name=call.name,
                 )
                 continue
-            
-            try:
-                result = await tool.execute(**call.arguments)
-            except Exception as e:
-                result = ToolResult(success=False, content="", error=str(e))
+            decision = self.tool_policy.evaluate(tool, call.arguments)
+            if not decision.allowed:
+                result = ToolResult(
+                    success=False,
+                    content="",
+                    error=decision.reason,
+                    metadata={"policy": "denied"},
+                )
+            else:
+                start = time.time()
+                try:
+                    result = await tool.execute(**call.arguments)
+                except Exception as e:
+                    result = ToolResult(success=False, content="", error=str(e))
+                duration = int((time.time() - start) * 1000)
+                result.metadata = {**(result.metadata or {}), "duration_ms": duration}
+            result.metadata = result.metadata or {}
             
             output = result.content if result.success else (result.error or "")
             self.conversation.add_tool_result_message(
@@ -234,6 +301,19 @@ class Aries:
                 error=result.error,
                 tool_name=call.name,
             )
+            self._log_transcript(
+                "tool",
+                output,
+                msg_id=str(uuid.uuid4()),
+                extra={
+                    "tool_name": call.name,
+                    "status": "success" if result.success else "fail",
+                    "duration_ms": result.metadata.get("duration_ms"),
+                    "input": call.arguments,
+                    "policy": result.metadata.get("policy"),
+                },
+            )
+            self._maybe_register_artifact(result, call.name)
             
             if result.success:
                 display_info(f"Tool {call.name} executed")
@@ -274,10 +354,41 @@ class Aries:
             console.print(f"\n{response_text}\n")
         
         self.conversation.add_assistant_message(response_text)
+        self._log_transcript("assistant", response_text, msg_id=str(uuid.uuid4()))
     
     def stop(self) -> None:
         """Stop the application loop."""
         self.running = False
+
+    def _log_transcript(self, role: str, content: str, msg_id: str, extra: dict | None = None) -> None:
+        if not self.workspace.logger:
+            return
+        entry = TranscriptEntry(
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            role=role,
+            content=content,
+            conversation_id=self.conversation_id,
+            message_id=msg_id,
+            extra=extra or {},
+        )
+        self.workspace.logger.log(entry)
+
+    def _maybe_register_artifact(self, result: ToolResult, tool_name: str) -> None:
+        if not self.workspace.artifacts or not result.metadata:
+            return
+        path = result.metadata.get("path")
+        if not path:
+            return
+        try:
+            self.workspace.artifacts.register_file(Path(path), source=tool_name)
+        except Exception:
+            return
+
+    def _apply_workspace_index_path(self) -> None:
+        if self.workspace.current:
+            index_dir = self.workspace.current.index_dir
+            self.indexer.config.indices_dir = index_dir
+            self.retriever.config.indices_dir = index_dir
 
 
 async def run_cli() -> int:

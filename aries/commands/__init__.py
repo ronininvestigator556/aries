@@ -10,6 +10,8 @@ from aries.commands.clear import ClearCommand
 from aries.commands.exit import ExitCommand
 from aries.commands.rag import RAGCommand
 from aries.commands.search import SearchCommand
+from aries.commands.workspace import WorkspaceCommand
+from aries.commands.profile import ProfileCommand
 
 # Command registry. The help command is resolved lazily to avoid circular import.
 COMMANDS: dict[str, type[BaseCommand] | None] = {
@@ -20,6 +22,8 @@ COMMANDS: dict[str, type[BaseCommand] | None] = {
     "quit": ExitCommand,  # Alias
     "rag": RAGCommand,
     "search": SearchCommand,
+    "workspace": WorkspaceCommand,
+    "profile": ProfileCommand,
 }
 
 

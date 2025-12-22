@@ -44,6 +44,8 @@ class Retriever:
         self.ollama = ollama
         self._current_index: str | None = None
         self._collection = None
+        self._last_results: list[RetrievedChunk] = []
+        self._last_handles: list[str] = []
     
     async def load_index(self, name: str) -> bool:
         """Load an index for retrieval.
@@ -94,8 +96,12 @@ class Retriever:
         docs = result.get("documents", [[]])[0]
         metadatas = result.get("metadatas", [[]])[0]
         distances = result.get("distances", [[]])[0] if "distances" in result else []
+        ids = result.get("ids", [[]])[0] if "ids" in result else []
 
-        for doc, meta, dist in zip(docs, metadatas, distances):
+        handles: list[str] = []
+        for doc, meta, dist, chunk_id in zip(docs, metadatas, distances, ids):
+            handle = f"{self._current_index}:{meta.get('chunk_id')}"
+            handles.append(handle)
             chunks.append(
                 RetrievedChunk(
                     content=doc,
@@ -104,15 +110,39 @@ class Retriever:
                     metadata=meta,
                 )
             )
-
+        self._last_results = chunks
+        self._last_handles = handles
         return chunks
     
     def unload(self) -> None:
         """Unload the current index."""
         self._current_index = None
         self._collection = None
-    
+        self._last_results = []
+        self._last_handles = []
+
     @property
     def current_index(self) -> str | None:
         """Get currently loaded index name."""
         return self._current_index
+
+    @property
+    def last_results(self) -> list[RetrievedChunk]:
+        return self._last_results
+
+    @property
+    def last_handles(self) -> list[str]:
+        return self._last_handles
+
+    def get_handle(self, handle: str) -> RetrievedChunk | None:
+        """Lookup a retrieved chunk by handle from last retrieval."""
+        try:
+            index, chunk_id = handle.split(":")
+        except ValueError:
+            return None
+        if index != self._current_index:
+            return None
+        for chunk in self._last_results:
+            if str(chunk.metadata.get("chunk_id")) == chunk_id:
+                return chunk
+        return None

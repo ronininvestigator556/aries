@@ -3,6 +3,7 @@ Plain text loader for RAG.
 """
 
 from pathlib import Path
+from datetime import datetime
 
 from aries.exceptions import DocumentLoadError
 from aries.rag.loaders.base import BaseLoader, Document
@@ -24,6 +25,12 @@ class TextLoader(BaseLoader):
             Document(
                 content=content,
                 source=str(path),
-                metadata={"name": path.name},
+                metadata={
+                    "name": path.name,
+                    "source_path": str(path),
+                    "content_type": "text/plain",
+                    "last_modified": datetime.utcfromtimestamp(path.stat().st_mtime).isoformat()
+                    + "Z",
+                },
             )
         ]

@@ -3,6 +3,7 @@ PDF loader for RAG using pypdf.
 """
 
 from pathlib import Path
+from datetime import datetime
 
 from pypdf import PdfReader
 
@@ -31,7 +32,14 @@ class PDFLoader(BaseLoader):
                 Document(
                     content=text,
                     source=f"{path}#page={idx + 1}",
-                    metadata={"page": idx + 1, "name": path.name},
+                    metadata={
+                        "page": idx + 1,
+                        "name": path.name,
+                        "source_path": str(path),
+                        "content_type": "application/pdf",
+                        "last_modified": datetime.utcfromtimestamp(path.stat().st_mtime).isoformat()
+                        + "Z",
+                    },
                 )
             )
         return documents

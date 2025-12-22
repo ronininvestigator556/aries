@@ -52,6 +52,8 @@ async def test_chat_and_stream(monkeypatch):
 
     content = await client.chat(model="llama3.2", messages=[])
     assert "Reply from llama3.2" in content
+    raw = await client.chat(model="llama3.2", messages=[], raw=True)
+    assert isinstance(raw, dict)
 
     collected = []
     async for chunk in client.chat_stream(model="llama3.2", messages=[]):

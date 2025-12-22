@@ -20,6 +20,8 @@ from aries.core.conversation import Conversation
 from aries.core.message import ToolCall
 from aries.core.ollama_client import OllamaClient
 from aries.exceptions import AriesError
+from aries.rag.indexer import Indexer
+from aries.rag.retriever import Retriever
 from aries.tools import get_all_tools
 from aries.tools.base import BaseTool, ToolResult
 from aries.ui.display import display_error, display_info, display_welcome
@@ -53,6 +55,8 @@ class Aries:
         self.tools: list[BaseTool] = get_all_tools()
         self.tool_definitions = [tool.to_ollama_format() for tool in self.tools]
         self.tool_map: dict[str, BaseTool] = {tool.name: tool for tool in self.tools}
+        self.indexer = Indexer(config.rag, self.ollama)
+        self.retriever = Retriever(config.rag, self.ollama)
 
     def _load_system_prompt(self) -> str | None:
         """Load the configured default system prompt if available."""
@@ -152,6 +156,19 @@ class Aries:
         while iteration < max_tool_iterations:
             iteration += 1
             messages = self.conversation.get_messages_for_ollama()
+            if self.current_rag:
+                context_chunks = await self._retrieve_context(message)
+                if context_chunks:
+                    context_text = "\n\n".join(
+                        f"[{chunk.source}] {chunk.content}" for chunk in context_chunks
+                    )
+                    messages.insert(
+                        1,
+                        {
+                            "role": "system",
+                            "content": f"Context:\n{context_text}",
+                        },
+                    )
             response = await self.ollama.chat(
                 model=self.current_model,
                 messages=messages,
@@ -174,6 +191,14 @@ class Aries:
             break
         else:
             display_error("Maximum tool iterations reached. Stopping.")
+
+    async def _retrieve_context(self, query: str):
+        """Fetch RAG context if an index is active."""
+        try:
+            return await self.retriever.retrieve(query)
+        except Exception as exc:
+            display_error(f"RAG retrieval failed: {exc}")
+            return []
     
     async def _execute_tool_calls(self, tool_calls: Iterable[ToolCall]) -> None:
         """Execute tool calls requested by the assistant."""

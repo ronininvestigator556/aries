@@ -32,7 +32,7 @@ from aries.core.tokenizer import TokenEstimator
 from aries.exceptions import AriesError, ConfigError
 from aries.rag.indexer import Indexer
 from aries.rag.retriever import Retriever
-from aries.providers import CoreProvider
+from aries.providers import CoreProvider, MCPProvider
 from aries.tools.base import BaseTool, ToolResult
 from aries.ui.display import display_error, display_info, display_warning, display_welcome
 from aries.ui.input import get_user_input
@@ -55,6 +55,8 @@ class Aries:
         self._warnings_shown: set[str] = set()
         self.tool_registry = ToolRegistry()
         self.tool_registry.register_provider(CoreProvider())
+        self._mcp_state: list[dict[str, Any]] = []
+        self._register_mcp_providers()
         self.tools: list[BaseTool] = self.tool_registry.list_tools()
         self.tool_definitions = [tool.to_ollama_format() for tool in self.tools]
         self.tool_map: dict[str, BaseTool] = self.tool_registry.tools
@@ -91,6 +93,68 @@ class Aries:
             return
         display_warning(message)
         self._warnings_shown.add(key)
+
+    def _register_mcp_providers(self) -> None:
+        """Register MCP providers when enabled."""
+        mcp_cfg = getattr(self.config, "providers", None)
+        if not mcp_cfg or not getattr(mcp_cfg, "mcp", None):
+            return
+        mcp_settings = mcp_cfg.mcp
+        if not mcp_settings.enabled:
+            return
+
+        if not mcp_settings.servers:
+            self._warn_once(
+                "mcp:no_servers",
+                "MCP provider enabled but no servers configured; skipping.",
+            )
+            return
+
+        for server in mcp_settings.servers:
+            try:
+                provider = MCPProvider(server, strict=mcp_settings.require)
+            except ConfigError:
+                # Already contextualized; re-raise for startup failure
+                raise
+            except Exception as exc:
+                if mcp_settings.require:
+                    raise ConfigError(
+                        f"Failed to initialize MCP server '{server.id}': {exc}"
+                    ) from exc
+                self._warn_once(
+                    f"mcp:{server.id}",
+                    f"MCP server '{server.id}' unavailable; tools will be skipped ({exc}).",
+                )
+                self._mcp_state.append(
+                    {
+                        "id": server.id,
+                        "provider_id": f"mcp:{server.id}",
+                        "provider_version": "unknown",
+                        "connected": False,
+                        "tools": 0,
+                        "reason": str(exc),
+                    }
+                )
+                continue
+
+            self.tool_registry.register_provider(provider)
+            self._mcp_state.append(
+                {
+                    "id": server.id,
+                    "provider_id": provider.provider_id,
+                    "provider_version": provider.provider_version,
+                    "connected": provider.connected,
+                    "tools": len(provider.list_tools()),
+                    "reason": provider.failure_reason,
+                }
+            )
+
+            if not provider.connected and not mcp_settings.require:
+                reason = provider.failure_reason or "connection unavailable"
+                self._warn_once(
+                    f"mcp:{server.id}:disconnected",
+                    f"MCP server '{server.id}' unavailable; tools skipped ({reason}).",
+                )
 
     def _resolve_default_profile(self) -> Profile:
         """Load the default profile with legacy fallback enabled."""
@@ -232,6 +296,7 @@ class Aries:
             "mutates_state": bool(getattr(tool, "mutates_state", False)),
             "provider_id": getattr(tool, "provider_id", ""),
             "provider_version": getattr(tool, "provider_version", ""),
+            "server_id": getattr(tool, "server_id", ""),
         }
 
         decision = self.tool_policy.evaluate(tool, call.arguments, workspace=self.workspace.current.root if self.workspace.current else None)
@@ -507,6 +572,7 @@ class Aries:
                     "tool_name": call.name,
                     "provider_id": getattr(tool, "provider_id", ""),
                     "provider_version": getattr(tool, "provider_version", ""),
+                    "server_id": getattr(tool, "server_id", ""),
                     "status": "success" if result.success else "fail",
                     "duration_ms": audit.get("duration_ms"),
                     "input": audit.get("input"),

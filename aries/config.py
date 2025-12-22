@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class OllamaConfig(BaseModel):
@@ -103,6 +103,70 @@ class ToolsConfig(BaseModel):
     )
 
 
+class MCPServerConfig(BaseModel):
+    """Configuration for a single MCP server."""
+
+    id: str
+    command: list[str] | None = Field(
+        default=None, description="Command to start the MCP server process"
+    )
+    url: str | None = Field(default=None, description="Optional MCP server URL endpoint")
+    env: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: int = Field(default=10, ge=1, description="Connection timeout in seconds")
+
+    @field_validator("url")
+    @classmethod
+    def _normalize_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip()
+
+    @field_validator("command")
+    @classmethod
+    def _normalize_command(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return [part for part in value if part]
+
+    @field_validator("id")
+    @classmethod
+    def _validate_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("MCP server id must be a non-empty string")
+        return normalized
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def _validate_timeout(cls, value: int) -> int:
+        return max(1, value)
+
+    @field_validator("env")
+    @classmethod
+    def _validate_env(cls, value: dict[str, str]) -> dict[str, str]:
+        return {str(k): str(v) for k, v in value.items()}
+
+    @model_validator(mode="after")
+    def _require_endpoint(self) -> "MCPServerConfig":
+        if not self.command and not self.url:
+            raise ValueError("MCP server must define either 'command' or 'url'")
+        return self
+
+
+class MCPProvidersConfig(BaseModel):
+    """Configuration for MCP tool providers."""
+
+    enabled: bool = False
+    require: bool = False
+    servers: list[MCPServerConfig] = Field(default_factory=list)
+
+
+class ProvidersConfig(BaseModel):
+    """Container for optional tool providers."""
+
+    mcp: MCPProvidersConfig = Field(default_factory=MCPProvidersConfig)
+
+
 class ConversationConfig(BaseModel):
     """Conversation and context window settings."""
     
@@ -129,6 +193,7 @@ class Config(BaseModel):
     rag: RAGConfig = Field(default_factory=RAGConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
     tokens: TokensConfig = Field(default_factory=TokensConfig)

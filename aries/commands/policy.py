@@ -94,6 +94,14 @@ class PolicyCommand(BaseCommand):
             f"{pid} (v{getattr(provider, 'provider_version', 'unknown')}): {len(tools_by_provider.get(pid, []))} tools"
             for pid, provider in sorted(providers.items())
         ]
+        mcp_state = sorted(getattr(app, "_mcp_state", []), key=lambda entry: entry.get("id", ""))
+        mcp_lines: list[str] = []
+        for entry in mcp_state:
+            status = "connected" if entry.get("connected") else "disconnected"
+            descriptor = f"{entry.get('id')} ({status}, {entry.get('tools', 0)} tools)"
+            if entry.get("reason") and not entry.get("connected"):
+                descriptor += f" - {entry['reason']}"
+            mcp_lines.append(descriptor)
 
         table = Table.grid(padding=(0, 1))
         table.add_row("Workspace:", workspace_label)
@@ -103,6 +111,8 @@ class PolicyCommand(BaseCommand):
         table.add_row("Confirmation:", "; ".join(confirmation_lines))
         if provider_lines:
             table.add_row("Providers:", "; ".join(provider_lines))
+        if mcp_lines:
+            table.add_row("MCP servers:", "; ".join(mcp_lines))
         table.add_row("Allowed roots:", ", ".join(allow_roots) if allow_roots else "none")
         table.add_row("Denied roots:", ", ".join(deny_roots) if deny_roots else "none")
         if allowlist:
@@ -166,6 +176,9 @@ class PolicyCommand(BaseCommand):
         meta_table.add_row("Tool:", tool.name)
         meta_table.add_row("Provider:", getattr(tool, "provider_id", "unknown"))
         meta_table.add_row("Provider version:", getattr(tool, "provider_version", "unknown"))
+        server_id = getattr(tool, "server_id", None)
+        if server_id:
+            meta_table.add_row("Server:", server_id)
         meta_table.add_row("Risk level:", getattr(tool, "risk_level", "unknown"))
         meta_table.add_row(
             "Capabilities:",

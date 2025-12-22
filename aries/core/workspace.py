@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import mimetypes
 import tarfile
 from dataclasses import dataclass, field
@@ -18,6 +19,9 @@ from aries.config import WorkspaceConfig
 
 def _now_iso() -> str:
     return datetime.utcnow().isoformat() + "Z"
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -84,25 +88,38 @@ class ArtifactRegistry:
         path: Path,
         description: str | None = None,
         source: str | None = None,
+        *,
+        extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Register an artifact and return its record."""
         path = path.expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(path)
 
-        sha256 = hashlib.sha256()
-        with path.open("rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                sha256.update(chunk)
+        extra_data = extra or {}
+
+        hash_value = extra_data.get("hash")
+        if not hash_value:
+            sha256 = hashlib.sha256()
+            with path.open("rb") as f:
+                for chunk in iter(lambda: f.read(8192), b""):
+                    sha256.update(chunk)
+            hash_value = sha256.hexdigest()
+
+        size_bytes = extra_data.get("size_bytes") or path.stat().st_size
+        mime_guess = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        mime_type = extra_data.get("mime") or extra_data.get("mime_type") or mime_guess
 
         record = {
             "path": str(path),
             "created_at": _now_iso(),
-            "mime_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
-            "size_bytes": path.stat().st_size,
-            "hash": sha256.hexdigest(),
-            "description": description,
-            "source": source,
+            "mime_type": mime_type,
+            "size_bytes": size_bytes,
+            "hash": hash_value,
+            "description": description or extra_data.get("description"),
+            "source": source or extra_data.get("source"),
+            "type": extra_data.get("type"),
+            "name": extra_data.get("name") or path.name,
         }
 
         manifest = self._read_manifest()
@@ -212,3 +229,45 @@ class WorkspaceManager:
             tar.extractall(self.root)
         return self.open(top)
 
+    def register_artifact_hint(
+        self,
+        artifact: dict[str, Any] | Path,
+        source: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Register an artifact from a tool or workflow hint.
+
+        Args:
+            artifact: Artifact path or metadata hint containing at least a path.
+            source: Optional source label for provenance.
+
+        Returns:
+            Manifest record or None if registration was skipped.
+        """
+        if not self.artifacts:
+            return None
+
+        hint = {"path": str(artifact)} if isinstance(artifact, Path) else dict(artifact)
+        path_value = hint.get("path")
+        if not path_value:
+            return None
+
+        path = Path(path_value).expanduser()
+        if not path.exists():
+            logger.warning("Artifact path not found for registration: %s", path)
+            return None
+
+        extra = {
+            "description": hint.get("description"),
+            "source": hint.get("source"),
+            "name": hint.get("name") or path.name,
+            "mime": hint.get("mime"),
+            "type": hint.get("type"),
+            "size_bytes": hint.get("size_bytes"),
+            "hash": hint.get("hash"),
+        }
+        return self.artifacts.register_file(
+            path,
+            description=extra.pop("description"),
+            source=source or extra.pop("source"),
+            extra=extra,
+        )

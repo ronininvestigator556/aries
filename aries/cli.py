@@ -9,10 +9,11 @@ This module handles:
 """
 
 import asyncio
+import hashlib
 import time
 import uuid
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from rich.console import Console
 
@@ -22,14 +23,14 @@ from aries.core.conversation import Conversation
 from aries.core.message import ToolCall
 from aries.core.ollama_client import OllamaClient
 from aries.core.tool_policy import ToolPolicy
-from aries.core.profile import ProfileManager
+from aries.core.profile import Profile, ProfileManager
 from aries.core.workspace import TranscriptEntry, WorkspaceManager
-from aries.exceptions import AriesError
+from aries.exceptions import AriesError, ConfigError
 from aries.rag.indexer import Indexer
 from aries.rag.retriever import Retriever
 from aries.tools import get_all_tools
 from aries.tools.base import BaseTool, ToolResult
-from aries.ui.display import display_error, display_info, display_welcome
+from aries.ui.display import display_error, display_info, display_warning, display_welcome
 from aries.ui.input import get_user_input
 
 
@@ -46,8 +47,14 @@ class Aries:
             config: Application configuration.
         """
         self.config = config
+        self._warnings_shown: set[str] = set()
+        self.profiles = ProfileManager(config.profiles.directory)
+        self.tool_policy = ToolPolicy(config.tools)
+        self.workspace = WorkspaceManager(config.workspace)
+        self.current_prompt: str = config.profiles.default
+        default_profile = self._load_profile(self.current_prompt, allow_legacy_prompt=True)
         self.conversation = Conversation(
-            system_prompt=self._load_system_prompt(),
+            system_prompt=default_profile.system_prompt,
             max_context_tokens=config.conversation.max_context_tokens,
             max_messages=config.conversation.max_messages,
             encoding=config.conversation.encoding,
@@ -56,22 +63,13 @@ class Aries:
         self.running = True
         self.current_model: str = config.ollama.default_model
         self.current_rag: str | None = None
-        self.current_prompt: str = config.profiles.default
         self.tools: list[BaseTool] = get_all_tools()
         self.tool_definitions = [tool.to_ollama_format() for tool in self.tools]
         self.tool_map: dict[str, BaseTool] = {tool.name: tool for tool in self.tools}
         self.indexer = Indexer(config.rag, self.ollama)
         self.retriever = Retriever(config.rag, self.ollama)
-        self.profiles = ProfileManager(config.profiles.directory)
-        self.workspace = WorkspaceManager(config.workspace)
-        self.tool_policy = ToolPolicy(config.tools)
         self.conversation_id = str(uuid.uuid4())
-        try:
-            default_profile = self.profiles.load(self.current_prompt)
-            if default_profile.system_prompt:
-                self.conversation.set_system_prompt(default_profile.system_prompt)
-        except FileNotFoundError:
-            pass
+        self._apply_profile(default_profile)
         if config.workspace.persist_by_default and config.workspace.default:
             try:
                 self.workspace.open(config.workspace.default)
@@ -80,17 +78,153 @@ class Aries:
                 self.workspace.new(config.workspace.default)
                 self._apply_workspace_index_path()
 
-    def _load_system_prompt(self) -> str | None:
-        """Load the configured default system prompt if available."""
-        prompt_path = Path(self.config.prompts.directory) / f"{self.config.prompts.default}.md"
-        if not prompt_path.exists():
-            return None
-        
+    def _warn_once(self, key: str, message: str) -> None:
+        """Emit a warning message once per key."""
+        if key in self._warnings_shown:
+            return
+        display_warning(message)
+        self._warnings_shown.add(key)
+
+    def _load_profile(self, name: str, *, allow_legacy_prompt: bool = False) -> Profile:
+        """Load a profile with optional legacy prompt fallback.
+
+        Args:
+            name: Profile name to load.
+            allow_legacy_prompt: Whether to fall back to prompts/<name>.md if missing.
+
+        Raises:
+            ConfigError: If the profile cannot be resolved.
+        """
         try:
-            return prompt_path.read_text(encoding="utf-8")
-        except Exception:
-            display_error(f"Failed to load system prompt from {prompt_path}")
-            return None
+            return self.profiles.load(name)
+        except FileNotFoundError:
+            prompt_path = Path(self.config.prompts.directory) / f"{name}.md"
+            if allow_legacy_prompt and prompt_path.exists():
+                self._warn_once(
+                    "legacy_prompt",
+                    f"Profile '{name}' not found; using legacy prompt file at {prompt_path}. "
+                    "Create a profile YAML to silence this warning.",
+                )
+                prompt_text = prompt_path.read_text(encoding="utf-8")
+                return Profile(name=name, description="Legacy prompt", system_prompt=prompt_text)
+
+            if allow_legacy_prompt and name == "researcher":
+                self._warn_once(
+                    "researcher_fallback",
+                    "No default profile configured; using built-in 'researcher' profile with no prompt.",
+                )
+                return Profile(name="researcher", description="Built-in default", system_prompt=None)
+
+            available = self.profiles.list()
+            available_msg = ", ".join(available) if available else "none found"
+            raise ConfigError(
+                f"Profile '{name}' not found. Available profiles: {available_msg}. "
+                "Create the profile under the profiles directory or update config.profiles.default."
+            )
+
+    def _apply_profile(self, profile: Profile) -> None:
+        """Apply a profile to the current conversation and tool policy."""
+        if profile.system_prompt:
+            self.conversation.set_system_prompt(profile.system_prompt)
+        if profile.tool_policy:
+            self.tool_policy.config.allow_shell = profile.tool_policy.get(
+                "allow_shell", self.tool_policy.config.allow_shell
+            )
+            self.tool_policy.config.allow_network = profile.tool_policy.get(
+                "allow_network", self.tool_policy.config.allow_network
+            )
+        self.current_prompt = profile.name
+
+    def _requires_confirmation(self, tool_name: str) -> bool:
+        """Determine whether a tool should require confirmation."""
+        return tool_name in {"write_file", "execute_shell"}
+
+    def _sanitize_arguments(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Sanitize tool arguments for logging."""
+        sanitized: dict[str, Any] = {}
+        for key, value in args.items():
+            if isinstance(value, str):
+                sanitized[key] = value if len(value) <= 200 else value[:200] + "...[truncated]"
+            else:
+                sanitized[key] = value
+        return sanitized
+
+    def _hash_output(self, text: str) -> tuple[str | None, int]:
+        """Hash output content with a bounded sample."""
+        if not text:
+            return None, 0
+        encoded = text.encode("utf-8")
+        sample = encoded[:4096]
+        return hashlib.sha256(sample).hexdigest(), len(encoded)
+
+    def _truncate_output(self, text: str, limit: int = 2000) -> tuple[str, bool]:
+        """Truncate long tool output for transcripts."""
+        if len(text) <= limit:
+            return text, False
+        return text[:limit] + f"\n... (truncated, {len(text)} total chars)", True
+
+    async def _confirm_tool_execution(self, tool: BaseTool, args: dict[str, Any]) -> bool:
+        """Prompt the user to confirm a mutating tool run."""
+        prompt_args = self._sanitize_arguments(args)
+        display_warning(f"Tool '{tool.name}' requested with args: {prompt_args}")
+        response = (await get_user_input("Allow tool execution? [y/N]: ")).strip().lower()
+        return response in {"y", "yes"}
+
+    async def _run_tool(self, tool: BaseTool, call: ToolCall) -> tuple[ToolResult, dict[str, Any]]:
+        """Execute a tool through centralized policy and confirmation gates."""
+        audit = {
+            "tool_name": tool.name,
+            "input": self._sanitize_arguments(call.arguments),
+        }
+
+        decision = self.tool_policy.evaluate(tool, call.arguments)
+        audit["policy_decision"] = decision.reason
+        audit["policy_allowed"] = decision.allowed
+
+        if not decision.allowed:
+            result = ToolResult(
+                success=False,
+                content="",
+                error=decision.reason,
+                metadata={"policy": "denied", "duration_ms": 0},
+            )
+            audit.update({"decision": "policy_denied", "output_sha256": None, "output_size": 0})
+            return result, audit
+
+        if self.config.tools.confirmation_required and self._requires_confirmation(tool.name):
+            confirmed = await self._confirm_tool_execution(tool, call.arguments)
+            if not confirmed:
+                result = ToolResult(
+                    success=False,
+                    content="",
+                    error="Tool execution cancelled by user",
+                    metadata={"policy": "cancelled", "duration_ms": 0},
+                )
+                audit.update({"decision": "user_denied", "output_sha256": None, "output_size": 0})
+                return result, audit
+
+        start = time.time()
+        try:
+            result = await tool.execute(**call.arguments)
+        except Exception as e:
+            result = ToolResult(success=False, content="", error=str(e))
+        duration = int((time.time() - start) * 1000)
+
+        result.metadata = {**(result.metadata or {}), "duration_ms": duration, "policy": decision.reason}
+        audit.update(
+            {
+                "decision": "allowed",
+                "duration_ms": duration,
+                "success": result.success,
+                "error": (result.error or "")[:200] if result.error else None,
+            }
+        )
+
+        output = result.content if result.success else (result.error or "")
+        output_hash, output_size = self._hash_output(output)
+        audit["output_sha256"] = output_hash
+        audit["output_size"] = output_size
+        return result, audit
     
     async def start(self) -> int:
         """Start the main application loop.
@@ -275,42 +409,33 @@ class Aries:
                     tool_name=call.name,
                 )
                 continue
-            decision = self.tool_policy.evaluate(tool, call.arguments)
-            if not decision.allowed:
-                result = ToolResult(
-                    success=False,
-                    content="",
-                    error=decision.reason,
-                    metadata={"policy": "denied"},
-                )
-            else:
-                start = time.time()
-                try:
-                    result = await tool.execute(**call.arguments)
-                except Exception as e:
-                    result = ToolResult(success=False, content="", error=str(e))
-                duration = int((time.time() - start) * 1000)
-                result.metadata = {**(result.metadata or {}), "duration_ms": duration}
+            result, audit = await self._run_tool(tool, call)
             result.metadata = result.metadata or {}
-            
+
             output = result.content if result.success else (result.error or "")
+            bounded_output, truncated = self._truncate_output(output, limit=max_display_chars)
             self.conversation.add_tool_result_message(
                 tool_call_id=call.id or call.name,
-                content=output,
+                content=bounded_output,
                 success=result.success,
                 error=result.error,
                 tool_name=call.name,
             )
             self._log_transcript(
                 "tool",
-                output,
+                bounded_output,
                 msg_id=str(uuid.uuid4()),
                 extra={
                     "tool_name": call.name,
                     "status": "success" if result.success else "fail",
                     "duration_ms": result.metadata.get("duration_ms"),
-                    "input": call.arguments,
-                    "policy": result.metadata.get("policy"),
+                    "input": audit.get("input"),
+                    "policy": audit.get("policy_decision"),
+                    "policy_allowed": audit.get("policy_allowed"),
+                    "decision": audit.get("decision"),
+                    "output_size": audit.get("output_size"),
+                    "output_sha256": audit.get("output_sha256"),
+                    "truncated": truncated,
                 },
             )
             self._maybe_register_artifact(result, call.name)
@@ -376,13 +501,14 @@ class Aries:
     def _maybe_register_artifact(self, result: ToolResult, tool_name: str) -> None:
         if not self.workspace.artifacts or not result.metadata:
             return
+        artifact_hint = result.metadata.get("artifact")
+        if artifact_hint:
+            self.workspace.register_artifact_hint(artifact_hint, source=tool_name)
+            return
+
         path = result.metadata.get("path")
-        if not path:
-            return
-        try:
-            self.workspace.artifacts.register_file(Path(path), source=tool_name)
-        except Exception:
-            return
+        if path:
+            self.workspace.register_artifact_hint({"path": path}, source=tool_name)
 
     def _apply_workspace_index_path(self) -> None:
         if self.workspace.current:
@@ -402,5 +528,9 @@ async def run_cli() -> int:
     config = load_config(config_path if config_path.exists() else None)
     
     # Create and start application
-    app = Aries(config)
+    try:
+        app = Aries(config)
+    except AriesError as exc:
+        display_error(str(exc))
+        return 1
     return await app.start()

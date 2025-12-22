@@ -45,16 +45,11 @@ class ProfileCommand(BaseCommand):
         if args.startswith("use "):
             name = args.split(maxsplit=1)[1]
             try:
-                profile = app.profiles.load(name)
-            except FileNotFoundError as exc:
+                profile = app._load_profile(name, allow_legacy_prompt=True)
+            except Exception as exc:
                 display_error(str(exc))
                 return
-            if profile.system_prompt:
-                app.conversation.set_system_prompt(profile.system_prompt)
-            if profile.tool_policy:
-                app.tool_policy.config.allow_shell = profile.tool_policy.get("allow_shell", False)
-                app.tool_policy.config.allow_network = profile.tool_policy.get("allow_network", False)
-            app.current_prompt = name
+            app._apply_profile(profile)
             display_success(f"Profile '{name}' activated.")
             return
 

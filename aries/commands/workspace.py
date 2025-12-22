@@ -64,6 +64,14 @@ class WorkspaceCommand(BaseCommand):
                 display_error(f"Export failed: {exc}")
                 return
             display_success(f"Workspace exported to {bundle}")
+            app.workspace.register_artifact_hint(
+                {
+                    "path": bundle,
+                    "type": "workspace_export",
+                    "description": f"Export of workspace {app.workspace.current.name if app.workspace.current else ''}".strip(),
+                },
+                source="workspace_export",
+            )
             return
 
         if args.startswith("import "):

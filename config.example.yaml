@@ -21,6 +21,21 @@ rag:
   top_k: 5
   indices_dir: "./indices"
 
+# Workspace settings
+workspace:
+  root: "./workspaces"
+  default: null
+  persist_by_default: false
+  transcript_dirname: "transcripts"
+  artifact_dirname: "artifacts"
+  indexes_dirname: "indexes"
+  manifest_name: "workspace.json"
+
+# Profiles (preferred prompt selection)
+profiles:
+  directory: "./profiles"
+  default: "default"
+
 # UI settings
 ui:
   theme: "dark"
@@ -34,6 +49,12 @@ tools:
   max_file_size_mb: 10
   allowed_extensions:
     - "*"
+  allowed_paths:
+    - "."
+  denied_paths: []
+  allow_shell: false
+  allow_network: false
+  confirmation_required: true
 
 # Conversation context settings
 conversation:
@@ -41,7 +62,7 @@ conversation:
   max_messages: 100
   encoding: "cl100k_base"
 
-# Prompts settings
+# Prompts settings (legacy fallback for migration)
 prompts:
   directory: "./prompts"
   default: "default"

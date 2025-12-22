@@ -1,0 +1,67 @@
+from pathlib import Path
+
+import pytest
+
+from aries.cli import Aries
+from aries.config import Config
+from aries.core.message import ToolCall
+
+
+def _bootstrap_config(tmp_path: Path) -> Config:
+    profile_dir = tmp_path / "profiles"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "default.yaml").write_text("name: default\nsystem_prompt: profile", encoding="utf-8")
+
+    config = Config()
+    config.profiles.directory = profile_dir
+    config.prompts.directory = tmp_path / "prompts"
+    config.workspace.root = tmp_path / "workspaces"
+    config.tools.allowed_paths = [tmp_path]
+    return config
+
+
+@pytest.mark.anyio
+async def test_policy_denies_disallowed_tool(tmp_path: Path) -> None:
+    config = _bootstrap_config(tmp_path)
+    config.tools.allow_shell = False
+    config.tools.confirmation_required = False
+
+    app = Aries(config)
+    tool = app.tool_map["execute_shell"]
+
+    result, audit = await app._run_tool(
+        tool,
+        ToolCall(id="call-1", name="execute_shell", arguments={"command": "echo hi"}),
+    )
+
+    assert not result.success
+    assert audit["decision"] == "policy_denied"
+    assert result.metadata and result.metadata.get("policy") == "denied"
+
+
+@pytest.mark.anyio
+async def test_confirmation_gate_blocks_on_user_denial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _bootstrap_config(tmp_path)
+    config.tools.allow_shell = True
+    config.tools.confirmation_required = True
+
+    app = Aries(config)
+    tool = app.tool_map["write_file"]
+
+    async def _deny(*_: object, **__: object) -> bool:
+        return False
+
+    monkeypatch.setattr(app, "_confirm_tool_execution", _deny)
+
+    result, audit = await app._run_tool(
+        tool,
+        ToolCall(
+            id="call-2",
+            name="write_file",
+            arguments={"path": str(tmp_path / "blocked.txt"), "content": "data"},
+        ),
+    )
+
+    assert not result.success
+    assert audit["decision"] == "user_denied"
+    assert result.metadata and result.metadata.get("policy") == "cancelled"

@@ -249,6 +249,7 @@ class WorkspaceManager:
         hint = {"path": str(artifact)} if isinstance(artifact, Path) else dict(artifact)
         path_value = hint.get("path")
         if not path_value:
+            logger.warning("Artifact hint missing path; skipping registration: %s", hint)
             return None
 
         path = Path(path_value).expanduser()

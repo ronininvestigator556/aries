@@ -117,7 +117,7 @@ class Conversation:
         self.add_message(message)
         return message
     
-    def set_system_prompt(self, prompt: str) -> None:
+    def set_system_prompt(self, prompt: str | None) -> None:
         """Set the system prompt.
         
         Args:

@@ -42,3 +42,39 @@ def test_missing_profile_raises_clear_error(tmp_path: Path) -> None:
     message = str(excinfo.value)
     assert "Available profiles: available" in message
     assert "Profile 'absent' not found" in message
+
+
+def test_default_profile_uses_yaml_without_warnings(tmp_path: Path) -> None:
+    config = Config()
+    config.profiles.directory = tmp_path / "profiles"
+    config.prompts.directory = tmp_path / "prompts"
+    config.workspace.root = tmp_path / "workspaces"
+    config.tools.allow_network = True
+    config.tools.allow_shell = True
+
+    config.profiles.directory.mkdir(parents=True)
+    (config.profiles.directory / "default.yaml").write_text(
+        "name: default\nsystem_prompt: profile prompt", encoding="utf-8"
+    )
+
+    app = Aries(config)
+
+    assert app.conversation.system_prompt == "profile prompt"
+    assert app.current_prompt == "default"
+    assert not app._warnings_shown
+
+
+def test_default_profile_falls_back_to_legacy_prompt(tmp_path: Path) -> None:
+    config = Config()
+    config.profiles.directory = tmp_path / "profiles"
+    config.prompts.directory = tmp_path / "prompts"
+    config.workspace.root = tmp_path / "workspaces"
+
+    config.prompts.directory.mkdir(parents=True, exist_ok=True)
+    (config.prompts.directory / "default.md").write_text("legacy prompt", encoding="utf-8")
+    config.profiles.directory.mkdir(parents=True, exist_ok=True)
+
+    app = Aries(config)
+
+    assert app.conversation.system_prompt == "legacy prompt"
+    assert "legacy_prompt:default" in app._warnings_shown

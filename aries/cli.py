@@ -39,44 +39,38 @@ console = Console()
 
 class Aries:
     """Main Aries application class."""
-    
+
     def __init__(self, config: Config) -> None:
         """Initialize Aries.
-        
+
         Args:
             config: Application configuration.
         """
         self.config = config
         self._warnings_shown: set[str] = set()
+        self.tools: list[BaseTool] = get_all_tools()
+        self.tool_definitions = [tool.to_ollama_format() for tool in self.tools]
+        self.tool_map: dict[str, BaseTool] = {tool.name: tool for tool in self.tools}
         self.profiles = ProfileManager(config.profiles.directory)
         self.tool_policy = ToolPolicy(config.tools)
         self.workspace = WorkspaceManager(config.workspace)
-        self.current_prompt: str = config.profiles.default
-        default_profile = self._load_profile(self.current_prompt, allow_legacy_prompt=True)
+        self.ollama = OllamaClient(config.ollama)
+        self.indexer = Indexer(config.rag, self.ollama)
+        self.retriever = Retriever(config.rag, self.ollama)
+        self.running = True
+        self.current_model: str = config.ollama.default_model
+        self.current_rag: str | None = None
+        self.conversation_id = str(uuid.uuid4())
+
+        default_profile = self._resolve_default_profile()
         self.conversation = Conversation(
-            system_prompt=default_profile.system_prompt,
+            system_prompt=None,
             max_context_tokens=config.conversation.max_context_tokens,
             max_messages=config.conversation.max_messages,
             encoding=config.conversation.encoding,
         )
-        self.ollama = OllamaClient(config.ollama)
-        self.running = True
-        self.current_model: str = config.ollama.default_model
-        self.current_rag: str | None = None
-        self.tools: list[BaseTool] = get_all_tools()
-        self.tool_definitions = [tool.to_ollama_format() for tool in self.tools]
-        self.tool_map: dict[str, BaseTool] = {tool.name: tool for tool in self.tools}
-        self.indexer = Indexer(config.rag, self.ollama)
-        self.retriever = Retriever(config.rag, self.ollama)
-        self.conversation_id = str(uuid.uuid4())
         self._apply_profile(default_profile)
-        if config.workspace.persist_by_default and config.workspace.default:
-            try:
-                self.workspace.open(config.workspace.default)
-                self._apply_workspace_index_path()
-            except FileNotFoundError:
-                self.workspace.new(config.workspace.default)
-                self._apply_workspace_index_path()
+        self._initialize_default_workspace()
 
     def _warn_once(self, key: str, message: str) -> None:
         """Emit a warning message once per key."""
@@ -84,6 +78,10 @@ class Aries:
             return
         display_warning(message)
         self._warnings_shown.add(key)
+
+    def _resolve_default_profile(self) -> Profile:
+        """Load the default profile with legacy fallback enabled."""
+        return self._load_profile(self.config.profiles.default, allow_legacy_prompt=True)
 
     def _load_profile(self, name: str, *, allow_legacy_prompt: bool = False) -> Profile:
         """Load a profile with optional legacy prompt fallback.
@@ -98,19 +96,13 @@ class Aries:
         try:
             return self.profiles.load(name)
         except FileNotFoundError:
-            prompt_path = Path(self.config.prompts.directory) / f"{name}.md"
-            if allow_legacy_prompt and prompt_path.exists():
-                self._warn_once(
-                    "legacy_prompt",
-                    f"Profile '{name}' not found; using legacy prompt file at {prompt_path}. "
-                    "Create a profile YAML to silence this warning.",
-                )
-                prompt_text = prompt_path.read_text(encoding="utf-8")
-                return Profile(name=name, description="Legacy prompt", system_prompt=prompt_text)
+            legacy = self._load_legacy_prompt(name, allow_legacy_prompt)
+            if legacy:
+                return legacy
 
             if allow_legacy_prompt and name == "researcher":
                 self._warn_once(
-                    "researcher_fallback",
+                    f"researcher_fallback:{name}",
                     "No default profile configured; using built-in 'researcher' profile with no prompt.",
                 )
                 return Profile(name="researcher", description="Built-in default", system_prompt=None)
@@ -122,18 +114,43 @@ class Aries:
                 "Create the profile under the profiles directory or update config.profiles.default."
             )
 
+    def _load_legacy_prompt(self, name: str, allow_legacy_prompt: bool) -> Profile | None:
+        """Load a legacy markdown prompt when allowed."""
+        if not allow_legacy_prompt:
+            return None
+
+        prompt_path = Path(self.config.prompts.directory) / f"{name}.md"
+        if not prompt_path.exists():
+            return None
+
+        self._warn_once(
+            f"legacy_prompt:{name}",
+            f"Profile '{name}' not found; using legacy prompt file at {prompt_path}. "
+            "Create a profile YAML to silence this warning.",
+        )
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        return Profile(name=name, description="Legacy prompt", system_prompt=prompt_text)
+
     def _apply_profile(self, profile: Profile) -> None:
         """Apply a profile to the current conversation and tool policy."""
-        if profile.system_prompt:
-            self.conversation.set_system_prompt(profile.system_prompt)
-        if profile.tool_policy:
-            self.tool_policy.config.allow_shell = profile.tool_policy.get(
-                "allow_shell", self.tool_policy.config.allow_shell
-            )
-            self.tool_policy.config.allow_network = profile.tool_policy.get(
-                "allow_network", self.tool_policy.config.allow_network
-            )
+        self.conversation.set_system_prompt(profile.system_prompt)
+        if profile.tool_policy is not None:
+            if "allow_shell" in profile.tool_policy:
+                self.tool_policy.config.allow_shell = bool(profile.tool_policy["allow_shell"])
+            if "allow_network" in profile.tool_policy:
+                self.tool_policy.config.allow_network = bool(profile.tool_policy["allow_network"])
         self.current_prompt = profile.name
+
+    def _initialize_default_workspace(self) -> None:
+        """Open or create the default workspace when configured."""
+        workspace_cfg = self.config.workspace
+        if not (workspace_cfg.persist_by_default and workspace_cfg.default):
+            return
+        try:
+            self.workspace.open(workspace_cfg.default)
+        except FileNotFoundError:
+            self.workspace.new(workspace_cfg.default)
+        self._apply_workspace_index_path()
 
     def _requires_confirmation(self, tool_name: str) -> bool:
         """Determine whether a tool should require confirmation."""
@@ -178,8 +195,10 @@ class Aries:
         }
 
         decision = self.tool_policy.evaluate(tool, call.arguments)
-        audit["policy_decision"] = decision.reason
+        audit["policy_reason"] = decision.reason
         audit["policy_allowed"] = decision.allowed
+        audit["duration_ms"] = 0
+        audit["success"] = False
 
         if not decision.allowed:
             result = ToolResult(
@@ -188,7 +207,14 @@ class Aries:
                 error=decision.reason,
                 metadata={"policy": "denied", "duration_ms": 0},
             )
-            audit.update({"decision": "policy_denied", "output_sha256": None, "output_size": 0})
+            audit.update(
+                {
+                    "decision": "policy_denied",
+                    "output_sha256": None,
+                    "output_size": 0,
+                    "error": decision.reason,
+                }
+            )
             return result, audit
 
         if self.config.tools.confirmation_required and self._requires_confirmation(tool.name):
@@ -200,7 +226,14 @@ class Aries:
                     error="Tool execution cancelled by user",
                     metadata={"policy": "cancelled", "duration_ms": 0},
                 )
-                audit.update({"decision": "user_denied", "output_sha256": None, "output_size": 0})
+                audit.update(
+                    {
+                        "decision": "user_denied",
+                        "output_sha256": None,
+                        "output_size": 0,
+                        "error": "Tool execution cancelled by user",
+                    }
+                )
                 return result, audit
 
         start = time.time()
@@ -210,11 +243,11 @@ class Aries:
             result = ToolResult(success=False, content="", error=str(e))
         duration = int((time.time() - start) * 1000)
 
+        audit["duration_ms"] = duration
         result.metadata = {**(result.metadata or {}), "duration_ms": duration, "policy": decision.reason}
         audit.update(
             {
                 "decision": "allowed",
-                "duration_ms": duration,
                 "success": result.success,
                 "error": (result.error or "")[:200] if result.error else None,
             }
@@ -428,14 +461,15 @@ class Aries:
                 extra={
                     "tool_name": call.name,
                     "status": "success" if result.success else "fail",
-                    "duration_ms": result.metadata.get("duration_ms"),
+                    "duration_ms": audit.get("duration_ms"),
                     "input": audit.get("input"),
-                    "policy": audit.get("policy_decision"),
+                    "policy_reason": audit.get("policy_reason"),
                     "policy_allowed": audit.get("policy_allowed"),
                     "decision": audit.get("decision"),
                     "output_size": audit.get("output_size"),
                     "output_sha256": audit.get("output_sha256"),
                     "truncated": truncated,
+                    "error": audit.get("error"),
                 },
             )
             self._maybe_register_artifact(result, call.name)
@@ -499,16 +533,32 @@ class Aries:
         self.workspace.logger.log(entry)
 
     def _maybe_register_artifact(self, result: ToolResult, tool_name: str) -> None:
-        if not self.workspace.artifacts or not result.metadata:
-            return
-        artifact_hint = result.metadata.get("artifact")
-        if artifact_hint:
-            self.workspace.register_artifact_hint(artifact_hint, source=tool_name)
+        registry = self.workspace.artifacts
+        if not registry or not result.metadata:
             return
 
-        path = result.metadata.get("path")
-        if path:
-            self.workspace.register_artifact_hint({"path": path}, source=tool_name)
+        artifact_meta = result.metadata.get("artifact")
+        hint: dict[str, Any] = {}
+        if isinstance(artifact_meta, dict):
+            hint = {k: v for k, v in artifact_meta.items() if v is not None}
+        elif artifact_meta:
+            hint = {"path": str(artifact_meta)}
+
+        path_value = hint.get("path") or result.metadata.get("path")
+        if not path_value:
+            return
+
+        path = Path(path_value).expanduser()
+        hint["path"] = str(path)
+
+        if path.exists():
+            extra = {k: v for k, v in hint.items() if k not in {"path"} and v is not None}
+            description = extra.pop("description", None)
+            source = extra.pop("source", None) or tool_name
+            registry.register_file(path, description=description, source=source, extra=extra)
+            return
+
+        self.workspace.register_artifact_hint(hint, source=tool_name)
 
     def _apply_workspace_index_path(self) -> None:
         if self.workspace.current:

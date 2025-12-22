@@ -15,6 +15,7 @@ class ToolResult:
     content: str
     error: str | None = None
     metadata: dict[str, Any] | None = None
+    artifacts: list[dict[str, Any]] | None = None
 
 
 class BaseTool(ABC):
@@ -22,6 +23,9 @@ class BaseTool(ABC):
     
     name: str = ""
     description: str = ""
+    mutates_state: bool = False
+    emits_artifacts: bool = False
+    risk_level: str = "read"
     
     @property
     @abstractmethod

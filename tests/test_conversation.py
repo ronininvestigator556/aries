@@ -3,6 +3,7 @@ import json
 import pytest
 
 from aries.core.conversation import Conversation
+from aries.core.tokenizer import TokenEstimator
 from aries.core.message import Message, Role
 
 
@@ -15,7 +16,11 @@ def test_message_pruning_by_count() -> None:
 
 
 def test_message_pruning_by_tokens() -> None:
-    convo = Conversation(max_messages=10, max_context_tokens=25)
+    convo = Conversation(
+        max_messages=10,
+        max_context_tokens=25,
+        token_estimator=TokenEstimator(mode="approx", approx_chars_per_token=1),
+    )
     convo.add_user_message("short message")
     convo.add_user_message("b" * 15)
     assert len(convo) == 1

@@ -41,19 +41,21 @@ class ToolPolicy:
 
     def evaluate(self, tool: BaseTool, args: dict[str, Any]) -> PolicyDecision:
         name = tool.name
+        risk = getattr(tool, "risk_level", "read")
         # Shell commands require explicit allow
         if name == "execute_shell":
             if not self.config.allow_shell:
-                return PolicyDecision(False, "Shell execution disabled by policy")
+                return PolicyDecision(False, f"Shell execution disabled by policy (risk={risk})")
             cwd = args.get("cwd")
             if cwd and not self._path_allowed(cwd):
-                return PolicyDecision(False, "Working directory not permitted")
+                return PolicyDecision(False, f"Working directory not permitted (risk={risk})")
         # Web search requires network allow
         if name == "search_web" and not self.config.allow_network:
-            return PolicyDecision(False, "Network tools disabled by policy")
+            return PolicyDecision(False, f"Network tools disabled by policy (risk={risk})")
         # File tools path checks
         if name in {"read_file", "write_file", "list_directory", "read_image"}:
             path = args.get("path")
             if not self._path_allowed(path):
-                return PolicyDecision(False, "Path access denied by policy")
-        return PolicyDecision(True, "allowed")
+                return PolicyDecision(False, f"Path access denied by policy (risk={risk})")
+        classification = "mutating" if getattr(tool, "mutates_state", False) else "read"
+        return PolicyDecision(True, f"allowed:{risk}:{classification}")

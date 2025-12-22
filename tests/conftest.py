@@ -11,7 +11,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from aries import config as config_module  # noqa: E402
 from aries.config import Config  # noqa: E402
-from aries.core import conversation as conversation_module  # noqa: E402
 from aries.core import ollama_client as ollama_client_module  # noqa: E402
 
 
@@ -25,20 +24,10 @@ def reset_config() -> Config:
 
 
 @pytest.fixture(autouse=True)
-def patch_tiktoken(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Avoid network downloads by stubbing tiktoken encoders."""
+def patch_ollama_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simplify tests without hitting the network."""
 
-    class _FakeEncoder:
-        def encode(self, text: str) -> list[int]:
-            return list(text.encode("utf-8"))
-        
-        def decode(self, tokens: list[int]) -> str:
-            return bytes(tokens).decode("utf-8")
-
-    monkeypatch.setattr(conversation_module.tiktoken, "get_encoding", lambda _: _FakeEncoder())
-    monkeypatch.setattr(
-        ollama_client_module.ollama, "ResponseError", Exception
-    )  # simplify tests without network
+    monkeypatch.setattr(ollama_client_module.ollama, "ResponseError", Exception)
 
 
 @pytest.fixture

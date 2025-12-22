@@ -45,6 +45,18 @@ class ProfilesConfig(BaseModel):
 
     directory: Path = Path("./profiles")
     default: str = "default"
+    require: bool = False
+
+
+class TokensConfig(BaseModel):
+    """Token counting settings."""
+
+    mode: str = Field(
+        default="approx",
+        description="Token counting mode: tiktoken | approx | disabled",
+    )
+    encoding: str = "cl100k_base"
+    approx_chars_per_token: int = Field(default=4, ge=1)
 
 
 class RAGConfig(BaseModel):
@@ -111,6 +123,7 @@ class Config(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
+    tokens: TokensConfig = Field(default_factory=TokensConfig)
 
     @classmethod
     def load(cls, path: Path | str) -> "Config":

@@ -91,3 +91,10 @@ async def test_manual_search_respects_policy_gate(
 
     output = capsys.readouterr().out
     assert "Network tools disabled by policy" in output
+
+
+def test_read_only_tool_skips_confirmation(tmp_path: Path) -> None:
+    config = _bootstrap_config(tmp_path)
+    app = Aries(config)
+
+    assert not app._requires_confirmation(app.tool_map["read_file"])

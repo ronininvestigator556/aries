@@ -88,15 +88,16 @@ class Conversation:
         content: str,
         success: bool = True,
         error: str | None = None,
+        tool_name: str | None = None,
     ) -> Message:
         """Add a tool result message.
-
+        
         Args:
             tool_call_id: Identifier of the originating tool call.
             content: Tool output content.
             success: Whether the tool execution succeeded.
             error: Optional error message.
-
+            
         Returns:
             The created message.
         """
@@ -105,6 +106,7 @@ class Conversation:
             content=content,
             success=success,
             error=error,
+            name=tool_name,
         )
         message = Message(
             role=Role.TOOL,

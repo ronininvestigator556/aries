@@ -31,5 +31,14 @@ def test_missing_profile_raises_clear_error(tmp_path: Path) -> None:
     config.prompts.directory = tmp_path / "prompts"
     config.workspace.root = tmp_path / "workspaces"
 
-    with pytest.raises(ConfigError):
+    config.profiles.directory.mkdir(parents=True)
+    (config.profiles.directory / "available.yaml").write_text(
+        "name: available\nsystem_prompt: here", encoding="utf-8"
+    )
+
+    with pytest.raises(ConfigError) as excinfo:
         Aries(config)
+
+    message = str(excinfo.value)
+    assert "Available profiles: available" in message
+    assert "Profile 'absent' not found" in message

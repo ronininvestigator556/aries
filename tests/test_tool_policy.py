@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from aries.cli import Aries
+from aries.commands.search import SearchCommand
 from aries.config import Config
 from aries.core.message import ToolCall
 
@@ -65,3 +66,28 @@ async def test_confirmation_gate_blocks_on_user_denial(tmp_path: Path, monkeypat
     assert not result.success
     assert audit["decision"] == "user_denied"
     assert result.metadata and result.metadata.get("policy") == "cancelled"
+
+
+@pytest.mark.anyio
+async def test_manual_search_respects_policy_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _bootstrap_config(tmp_path)
+    config.tools.allow_network = False
+    config.tools.confirmation_required = False
+    config.workspace.persist_by_default = True
+    config.workspace.default = "demo"
+
+    app = Aries(config)
+    search_tool = app.tool_map["search_web"]
+
+    async def _boom(*_: object, **__: object) -> None:
+        raise AssertionError("Search tool should be blocked by policy")
+
+    monkeypatch.setattr(search_tool, "execute", _boom)
+
+    cmd = SearchCommand()
+    await cmd.execute(app, "blocked query")
+
+    output = capsys.readouterr().out
+    assert "Network tools disabled by policy" in output

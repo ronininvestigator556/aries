@@ -7,8 +7,6 @@ Uses Pydantic for type-safe configuration with YAML file support.
 from pathlib import Path
 from typing import Any
 
-import warnings
-
 import yaml
 from pydantic import BaseModel, Field
 
@@ -137,10 +135,9 @@ class Config(BaseModel):
 
         data, migration_warnings = migrate_config_data(raw_data)
 
-        for message in migration_warnings:
-            warnings.warn(message, stacklevel=2)
-
-        return cls.model_validate(data)
+        config = cls.model_validate(data)
+        object.__setattr__(config, "_migration_warnings", migration_warnings)
+        return config
     
     def save(self, path: Path | str) -> None:
         """Save configuration to a YAML file.

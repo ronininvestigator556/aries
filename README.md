@@ -48,7 +48,7 @@ Core capabilities already in the codebase include:
 2. **Configure Ollama**
    - Ensure `ollama serve` is running locally.
    - Update `config.yaml` (or copy `config.example.yaml`) with your Ollama host and default model.
-   - Create a profile YAML under `profiles/` (e.g., `profiles/default.yaml`) to set the system prompt and optional tool policy. Aries will fall back to `prompts/default.md` for legacy configs and emit a warning.
+   - Create a profile YAML under `profiles/` (e.g., `profiles/default.yaml`) to set the system prompt and optional tool policy. Aries will fall back to `prompts/default.md` for legacy configs, emit a single warning, and still persist transcripts/artifacts when workspaces are enabled.
 
 3. **(Optional) Setup Search**
    - Aries uses SearXNG for web search. You can run it easily with Docker:
@@ -79,7 +79,7 @@ Models that support function/tool calls can invoke the registered tools:
 - `read_image` (returns base64 for vision models)
 
 Tool execution results are injected back into the conversation to inform follow-up model responses.
-Mutating tools (`write_file`, `execute_shell`) require confirmation when `tools.confirmation_required` is true, and all tool runs are filtered through the ToolPolicy allow/deny lists. Tools that produce files return artifact hints so the active workspace records them in `artifacts/manifest.json` (missing files are logged instead of crashing).
+Mutating tools (`write_file`, `execute_shell`) require confirmation when `tools.confirmation_required` is true, and all tool runs—including manual commands like `/search`—are filtered through the ToolPolicy allow/deny lists. Tools that produce files return artifact hints so the active workspace records them in `artifacts/manifest.json` (missing or malformed paths are logged instead of crashing).
 
 ## Phase 2 golden path
 
@@ -120,6 +120,12 @@ pytest
 ```
 
 The tests use local stubs for Ollama interactions and a fake token encoder for deterministic behavior.
+
+## Troubleshooting
+
+- **Profile not found:** Ensure the desired profile YAML exists under `profiles/` (e.g., `profiles/default.yaml`). If migrating from a legacy prompt, keep `prompts/<name>.md` in place; Aries will fall back once and list available profiles in the error.
+- **Tool denied by policy:** Check `tools.allow_shell`, `tools.allow_network`, and path allow/deny lists in your config or active profile. Mutating tools may also stop at the confirmation gate when `tools.confirmation_required` is true.
+- **File missing from artifacts:** Confirm a workspace is open/persisted and that the tool returned an artifact hint or `metadata.path`. Missing or invalid paths are logged; the manifest is stored under `<workspace>/artifacts/manifest.json`.
 
 ## Contributing
 

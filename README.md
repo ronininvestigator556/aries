@@ -79,7 +79,7 @@ Models that support function/tool calls can invoke the registered tools:
 - `read_image` (returns base64 for vision models)
 
 Tool execution results are injected back into the conversation to inform follow-up model responses.
-Mutating tools (`write_file`, `execute_shell`) require confirmation when `tools.confirmation_required` is true, and all tool runs—including manual commands like `/search`—are filtered through the ToolPolicy allow/deny lists. Tools that produce files return artifact hints so the active workspace records them in `artifacts/manifest.json` (missing or malformed paths are logged instead of crashing).
+Tools declare whether they mutate state and carry a risk classification; confirmation prompts honor those attributes when `tools.confirmation_required` is true, and all tool runs—including manual commands like `/search`—are filtered through the ToolPolicy allow/deny lists. Tools that emit artifacts (e.g., `write_file`) register explicit artifact hints in `artifacts/manifest.json`; legacy `metadata.path` is honored only for tools that declare `emits_artifacts`, and missing paths are logged instead of crashing.
 
 ## Phase 2 golden path
 
@@ -100,7 +100,8 @@ Key sections in `config.yaml`:
 - `ui`: streaming toggle and history display limits.
 - `tools`: shell timeout, max file size, allowed extensions, path allow/deny lists, `allow_shell`, `allow_network`, and `confirmation_required` for mutating tools.
 - `workspace`: persistence root, default workspace, and directory names for transcripts/artifacts/indexes (artifact manifests live under `artifacts/manifest.json`).
-- `profiles`: profile directory and default profile name (primary behavior control).
+- `profiles`: profile directory, default profile name, and `require` to disable legacy prompt fallback in production.
+- `tokens`: token counting mode (`approx` by default for offline safety, `tiktoken` with a warning-and-fallback, or `disabled`), plus encoding and character-per-token heuristic.
 - `conversation`: max context tokens and message count for pruning.
 - `prompts`: directory and default prompt name (legacy fallback; Aries will migrate `prompts.default` to `profiles.default` with a warning).
 
@@ -119,11 +120,11 @@ Run the suite:
 pytest
 ```
 
-The tests use local stubs for Ollama interactions and a fake token encoder for deterministic behavior.
+The tests use local stubs for Ollama interactions and exercise both approximate and fallback token counting.
 
 ## Troubleshooting
 
-- **Profile not found:** Ensure the desired profile YAML exists under `profiles/` (e.g., `profiles/default.yaml`). If migrating from a legacy prompt, keep `prompts/<name>.md` in place; Aries will fall back once and list available profiles in the error.
+- **Profile not found:** Ensure the desired profile YAML exists under `profiles/` (e.g., `profiles/default.yaml`). If migrating from a legacy prompt, keep `prompts/<name>.md` in place; Aries will fall back once and list available profiles in the error unless `profiles.require` is set.
 - **Tool denied by policy:** Check `tools.allow_shell`, `tools.allow_network`, and path allow/deny lists in your config or active profile. Mutating tools may also stop at the confirmation gate when `tools.confirmation_required` is true.
 - **File missing from artifacts:** Confirm a workspace is open/persisted and that the tool returned an artifact hint or `metadata.path`. Missing or invalid paths are logged; the manifest is stored under `<workspace>/artifacts/manifest.json`.
 

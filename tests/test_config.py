@@ -78,3 +78,18 @@ def test_default_profile_falls_back_to_legacy_prompt(tmp_path: Path) -> None:
 
     assert app.conversation.system_prompt == "legacy prompt"
     assert "legacy_prompt:default" in app._warnings_shown
+
+
+def test_profiles_require_blocks_legacy_fallback(tmp_path: Path) -> None:
+    config = Config()
+    config.profiles.directory = tmp_path / "profiles"
+    config.profiles.require = True
+    config.prompts.directory = tmp_path / "prompts"
+    config.workspace.root = tmp_path / "workspaces"
+
+    config.prompts.directory.mkdir(parents=True, exist_ok=True)
+    (config.prompts.directory / "default.md").write_text("legacy prompt", encoding="utf-8")
+    config.profiles.directory.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(ConfigError):
+        Aries(config)

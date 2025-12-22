@@ -45,7 +45,11 @@ class ProfileCommand(BaseCommand):
         if args.startswith("use "):
             name = args.split(maxsplit=1)[1]
             try:
-                profile = app._load_profile(name, allow_legacy_prompt=True)
+                profile = app._load_profile(
+                    name,
+                    allow_legacy_prompt=not app.config.profiles.require,
+                    require_profile=app.config.profiles.require,
+                )
             except Exception as exc:
                 display_error(str(exc))
                 return

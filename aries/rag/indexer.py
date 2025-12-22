@@ -17,6 +17,7 @@ import hashlib
 from aries.config import RAGConfig
 from aries.exceptions import DocumentLoadError, IndexError
 from aries.core.ollama_client import OllamaClient
+from aries.core.tokenizer import TokenEstimator
 from aries.rag.chunker import TextChunker
 from aries.rag.loaders import LOADERS, BaseLoader, Document
 
@@ -25,9 +26,11 @@ class Indexer:
     """Index documents into ChromaDB."""
     
     def __init__(
-        self, 
+        self,
         config: RAGConfig,
         ollama: OllamaClient,
+        *,
+        token_estimator: TokenEstimator | None = None,
     ) -> None:
         """Initialize indexer.
         
@@ -41,6 +44,7 @@ class Indexer:
         self._chunker = TextChunker(
             chunk_size=config.chunk_size,
             chunk_overlap=config.chunk_overlap,
+            token_estimator=token_estimator,
         )
     
     async def index_directory(

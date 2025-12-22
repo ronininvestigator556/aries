@@ -7,9 +7,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import tiktoken
-
 from aries.core.message import Message, Role, ToolCall, ToolResultMessage
+from aries.core.tokenizer import TokenEstimator
 
 
 class Conversation:
@@ -21,6 +20,7 @@ class Conversation:
         max_context_tokens: int = 4096,
         max_messages: int = 100,
         encoding: str = "cl100k_base",
+        token_estimator: TokenEstimator | None = None,
     ) -> None:
         """Initialize conversation.
         
@@ -35,11 +35,7 @@ class Conversation:
         self.max_context_tokens = max_context_tokens
         self.max_messages = max_messages
         self.encoding = encoding
-        try:
-            self._encoder = tiktoken.get_encoding(encoding)
-        except Exception:
-            self._encoder = tiktoken.get_encoding("cl100k_base")
-            self.encoding = "cl100k_base"
+        self._tokenizer = token_estimator or TokenEstimator(mode="approx", encoding=encoding)
     
     def add_message(self, message: Message) -> None:
         """Add a message to the conversation.
@@ -241,7 +237,7 @@ class Conversation:
     
     def _estimate_tokens(self, text: str) -> int:
         """Estimate tokens for a string using the configured encoding."""
-        return len(self._encoder.encode(text or ""))
+        return self._tokenizer.count(text or "")
     
     def _prune_history(self) -> None:
         """Prune history based on message count and token limits."""

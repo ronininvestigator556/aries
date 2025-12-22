@@ -10,6 +10,7 @@ This module handles:
 
 import asyncio
 import hashlib
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -25,6 +26,7 @@ from aries.core.ollama_client import OllamaClient
 from aries.core.tool_policy import ToolPolicy
 from aries.core.profile import Profile, ProfileManager
 from aries.core.workspace import TranscriptEntry, WorkspaceManager
+from aries.core.tokenizer import TokenEstimator
 from aries.exceptions import AriesError, ConfigError
 from aries.rag.indexer import Indexer
 from aries.rag.retriever import Retriever
@@ -35,6 +37,7 @@ from aries.ui.input import get_user_input
 
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 class Aries:
@@ -51,11 +54,16 @@ class Aries:
         self.tools: list[BaseTool] = get_all_tools()
         self.tool_definitions = [tool.to_ollama_format() for tool in self.tools]
         self.tool_map: dict[str, BaseTool] = {tool.name: tool for tool in self.tools}
+        self._token_estimator = TokenEstimator(
+            mode=config.tokens.mode,
+            encoding=config.tokens.encoding,
+            approx_chars_per_token=config.tokens.approx_chars_per_token,
+        )
         self.profiles = ProfileManager(config.profiles.directory)
         self.tool_policy = ToolPolicy(config.tools)
         self.workspace = WorkspaceManager(config.workspace)
         self.ollama = OllamaClient(config.ollama)
-        self.indexer = Indexer(config.rag, self.ollama)
+        self.indexer = Indexer(config.rag, self.ollama, token_estimator=self._token_estimator)
         self.retriever = Retriever(config.rag, self.ollama)
         self.running = True
         self.current_model: str = config.ollama.default_model
@@ -68,6 +76,7 @@ class Aries:
             max_context_tokens=config.conversation.max_context_tokens,
             max_messages=config.conversation.max_messages,
             encoding=config.conversation.encoding,
+            token_estimator=self._token_estimator,
         )
         self._apply_profile(default_profile)
         self._initialize_default_workspace()
@@ -81,14 +90,26 @@ class Aries:
 
     def _resolve_default_profile(self) -> Profile:
         """Load the default profile with legacy fallback enabled."""
-        return self._load_profile(self.config.profiles.default, allow_legacy_prompt=True)
+        allow_legacy = not self.config.profiles.require
+        return self._load_profile(
+            self.config.profiles.default,
+            allow_legacy_prompt=allow_legacy,
+            require_profile=self.config.profiles.require,
+        )
 
-    def _load_profile(self, name: str, *, allow_legacy_prompt: bool = False) -> Profile:
+    def _load_profile(
+        self,
+        name: str,
+        *,
+        allow_legacy_prompt: bool = False,
+        require_profile: bool = False,
+    ) -> Profile:
         """Load a profile with optional legacy prompt fallback.
 
         Args:
             name: Profile name to load.
             allow_legacy_prompt: Whether to fall back to prompts/<name>.md if missing.
+            require_profile: Whether profile presence is mandatory.
 
         Raises:
             ConfigError: If the profile cannot be resolved.
@@ -96,6 +117,12 @@ class Aries:
         try:
             return self.profiles.load(name)
         except FileNotFoundError:
+            if require_profile:
+                raise ConfigError(
+                    f"Profile '{name}' is required but was not found. "
+                    "Create the profile under the profiles directory or disable profiles.require."
+                )
+
             legacy = self._load_legacy_prompt(name, allow_legacy_prompt)
             if legacy:
                 return legacy
@@ -152,9 +179,9 @@ class Aries:
             self.workspace.new(workspace_cfg.default)
         self._apply_workspace_index_path()
 
-    def _requires_confirmation(self, tool_name: str) -> bool:
+    def _requires_confirmation(self, tool: BaseTool) -> bool:
         """Determine whether a tool should require confirmation."""
-        return tool_name in {"write_file", "execute_shell"}
+        return bool(tool.mutates_state)
 
     def _sanitize_arguments(self, args: dict[str, Any]) -> dict[str, Any]:
         """Sanitize tool arguments for logging."""
@@ -183,7 +210,9 @@ class Aries:
     async def _confirm_tool_execution(self, tool: BaseTool, args: dict[str, Any]) -> bool:
         """Prompt the user to confirm a mutating tool run."""
         prompt_args = self._sanitize_arguments(args)
-        display_warning(f"Tool '{tool.name}' requested with args: {prompt_args}")
+        display_warning(
+            f"Tool '{tool.name}' (risk={getattr(tool, 'risk_level', 'unknown')}) requested with args: {prompt_args}"
+        )
         response = (await get_user_input("Allow tool execution? [y/N]: ")).strip().lower()
         return response in {"y", "yes"}
 
@@ -192,6 +221,8 @@ class Aries:
         audit = {
             "tool_name": tool.name,
             "input": self._sanitize_arguments(call.arguments),
+            "risk_level": getattr(tool, "risk_level", "read"),
+            "mutates_state": bool(getattr(tool, "mutates_state", False)),
         }
 
         decision = self.tool_policy.evaluate(tool, call.arguments)
@@ -217,7 +248,7 @@ class Aries:
             )
             return result, audit
 
-        if self.config.tools.confirmation_required and self._requires_confirmation(tool.name):
+        if self.config.tools.confirmation_required and self._requires_confirmation(tool):
             confirmed = await self._confirm_tool_execution(tool, call.arguments)
             if not confirmed:
                 result = ToolResult(
@@ -472,7 +503,7 @@ class Aries:
                     "error": audit.get("error"),
                 },
             )
-            self._maybe_register_artifact(result, call.name)
+            self._maybe_register_artifact(result, tool)
             
             if result.success:
                 display_info(f"Tool {call.name} executed")
@@ -532,33 +563,59 @@ class Aries:
         )
         self.workspace.logger.log(entry)
 
-    def _maybe_register_artifact(self, result: ToolResult, tool_name: str) -> None:
+    def _maybe_register_artifact(self, result: ToolResult, tool: BaseTool) -> None:
         registry = self.workspace.artifacts
-        if not registry or not result.metadata:
+        if not registry or not result.metadata or not getattr(tool, "emits_artifacts", False):
             return
 
         artifact_meta = result.metadata.get("artifact")
-        hint: dict[str, Any] = {}
+        hints: list[dict[str, Any]] = []
         if isinstance(artifact_meta, dict):
-            hint = {k: v for k, v in artifact_meta.items() if v is not None}
+            hints.append({k: v for k, v in artifact_meta.items() if v is not None})
+        elif isinstance(artifact_meta, list):
+            hints.extend([h for h in artifact_meta if isinstance(h, dict)])
         elif artifact_meta:
-            hint = {"path": str(artifact_meta)}
+            hints.append({"path": str(artifact_meta)})
 
-        path_value = hint.get("path") or result.metadata.get("path")
-        if not path_value:
+        if result.artifacts:
+            hints.extend([h for h in result.artifacts if isinstance(h, dict)])
+
+        legacy_path = result.metadata.get("path")
+        if legacy_path:
+            hints.append({"path": str(legacy_path)})
+
+        if not hints:
             return
 
-        path = Path(path_value).expanduser()
-        hint["path"] = str(path)
+        seen_paths: set[str] = set()
+        for hint in hints:
+            path_value = hint.get("path")
+            if not path_value:
+                continue
 
-        if path.exists():
+            path = Path(path_value).expanduser()
+            normalized = str(path.resolve() if path.exists() else path)
+            if normalized in seen_paths:
+                continue
+            seen_paths.add(normalized)
+
+            if not path.exists():
+                logger.warning("Artifact path not found for registration: %s", path)
+                continue
+
+            if self.workspace.current:
+                try:
+                    if not path.resolve().is_relative_to(self.workspace.current.root.resolve()):
+                        logger.warning("Artifact outside workspace ignored: %s", path)
+                        continue
+                except ValueError:
+                    logger.warning("Artifact outside workspace ignored: %s", path)
+                    continue
+
             extra = {k: v for k, v in hint.items() if k not in {"path"} and v is not None}
             description = extra.pop("description", None)
-            source = extra.pop("source", None) or tool_name
+            source = extra.pop("source", None) or tool.name
             registry.register_file(path, description=description, source=source, extra=extra)
-            return
-
-        self.workspace.register_artifact_hint(hint, source=tool_name)
 
     def _apply_workspace_index_path(self) -> None:
         if self.workspace.current:

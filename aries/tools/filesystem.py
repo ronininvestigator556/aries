@@ -11,6 +11,7 @@ import aiofiles
 
 from aries.tools.base import BaseTool, ToolResult
 from aries.exceptions import FileToolError
+from aries.core.workspace import resolve_and_validate_path
 
 
 class ReadFileTool(BaseTool):
@@ -50,7 +51,12 @@ class ReadFileTool(BaseTool):
             ToolResult with file contents.
         """
         try:
-            file_path = Path(path).expanduser().resolve()
+            file_path = resolve_and_validate_path(
+                path,
+                workspace=kwargs.get("workspace"),
+                allowed_paths=kwargs.get("allowed_paths"),
+                denied_paths=kwargs.get("denied_paths"),
+            )
             
             if not file_path.exists():
                 return ToolResult(
@@ -134,7 +140,12 @@ class WriteFileTool(BaseTool):
             ToolResult with success status.
         """
         try:
-            file_path = Path(path).expanduser().resolve()
+            file_path = resolve_and_validate_path(
+                path,
+                workspace=kwargs.get("workspace"),
+                allowed_paths=kwargs.get("allowed_paths"),
+                denied_paths=kwargs.get("denied_paths"),
+            )
             file_mode = "w" if mode == "write" else "a"
             
             # Create parent directories if needed
@@ -216,7 +227,12 @@ class ListDirectoryTool(BaseTool):
             ToolResult with file listing.
         """
         try:
-            dir_path = Path(path).expanduser().resolve()
+            dir_path = resolve_and_validate_path(
+                path,
+                workspace=kwargs.get("workspace"),
+                allowed_paths=kwargs.get("allowed_paths"),
+                denied_paths=kwargs.get("denied_paths"),
+            )
             
             if not dir_path.exists():
                 return ToolResult(

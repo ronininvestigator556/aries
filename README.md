@@ -1,18 +1,33 @@
-# Aries — AI Research & Investigation Enhancement System
+# Aries — Local-First, Terminal-Native AI Workbench
 
-Aries is a terminal-first AI assistant that connects to locally running LLMs via **Ollama**. It ships with command-driven controls, streaming console output, and tool integrations for files, shell commands, and basic vision image loading. The project prioritizes local-first workflows for research and investigation tasks without relying on cloud services.
+Aries is a **local-first, terminal-native AI workbench** that connects to locally running LLMs via **Ollama**. It is built for **research, synthesis, and tool-augmented reasoning** while staying domain-neutral. All core behavior prioritizes:
 
-## Current state (Phase 2 in progress)
+- **Local-first** operation with explicit opt-ins for networked tools.
+- **Inspectability** of context, retrieval, and tool execution.
+- **Policy-driven** capabilities rather than prompt tricks.
+- **Composable** extensions through providers and tooling.
 
-The codebase now includes the Phase 1 MVP plus the first Phase 2 capabilities:
+This project is a cross-collaboration between **Codex (implementation/wiring)**, **Claude Code (specs/tests/docs)**, and **Gemini (RAG + UX ergonomics)** to keep the roadmap, contributions, and tooling aligned.
 
-- **CLI app**: `python -m aries` starts the Rich-powered console loop with prompt-toolkit input and command routing.
+## Current focus (Phase 2 — Reliable Workbench)
+
+We are implementing the outcomes defined in `ROADMAP.md`:
+
+- **Workspaces & persistence**: Optional, operator-controlled transcripts, artifacts, and indexes.
+- **Trustworthy RAG**: Deterministic ingestion, inspectable citations, and retrieval quality checks.
+- **Tool policy & auditability**: Explicit allowlists, logging, and bounded execution.
+- **Prompt profiles**: YAML-defined profiles that bind tool policy and behavior.
+- **Export & portability**: Workspace and artifact export/import with manifests.
+
+Core capabilities already in the codebase include:
+
+- **CLI app**: `python -m aries` launches the Rich-powered console loop with prompt-toolkit input and command routing.
 - **Ollama integration**: Lists models, switches active models, and streams chat responses.
-- **Commands**: `/model`, `/help`, `/clear`, `/exit`, plus Phase 2 `/rag` (index/select) and `/search` (SearXNG web search).
+- **Commands**: `/model`, `/help`, `/clear`, `/exit`, `/rag` (index/select), and `/search` (SearXNG web search).
 - **Conversation management**: Tracks history, tool calls/results, and prunes context by message count and token budget.
-- **Tools**: File read/write/list, shell execution, image loading for vision models, and SearXNG web search are registered for model tool-calling.
+- **Tools**: File read/write/list, shell execution, image loading for vision models, and SearXNG web search with audit-friendly logging expectations.
 - **Configuration**: YAML-backed config with defaults for Ollama, UI, tools, prompts, and conversation limits.
-- **RAG (early)**: Text/Markdown/PDF/EPUB loaders, token-aware chunking, ChromaDB indexing, Ollama embeddings, `/rag` command to index/select, and automatic context injection on chat when an index is active.
+- **RAG (early)**: Text/Markdown/PDF/EPUB loaders, token-aware chunking, ChromaDB indexing, Ollama embeddings, `/rag` command to index/select, and automatic context injection when an index is active.
 - **Tests**: Automated coverage for configuration, conversation behavior, Ollama client stubs, tools, chunker, and RAG indexing/retrieval (`pytest`).
 
 ### Not yet implemented (future phases)
@@ -20,7 +35,7 @@ The codebase now includes the Phase 1 MVP plus the first Phase 2 capabilities:
 - Advanced TUI layout, richer prompt management, and conversation persistence.
 - Additional RAG features (multi-format chunking strategies, better metadata, scoring).
 - Further web search/result formatting and multi-tool orchestration.
-- MCP (Model Context Protocol) Server Compatibility: Integration with tools like desktop-commander and Playwright to enhance file handling/navigation and automate browser activities.
+- MCP (Model Context Protocol) provider layer and bounded planner per the roadmap.
 
 ## Quick start
 
@@ -91,4 +106,6 @@ The tests use local stubs for Ollama interactions and a fake token encoder for d
 
 ## Contributing
 
-Follow the conventions in `CONVENTIONS.md` (Black + isort, type hints everywhere, Google-style docstrings). New commands and tools should be registered through their respective registries and include accompanying tests where possible.
+Aries follows the architectural contract in `CONTRIBUTING.md` (inspectability, policy enforcement, determinism, domain-neutrality). Coding standards live in `CONVENTIONS.md` (Black + isort, type hints everywhere, Google-style docstrings). New commands and tools should be registered through their respective registries and include accompanying tests where possible.
+
+For planning work, align with the **feature** and **bug** issue templates in `.github/ISSUE_TEMPLATE/` so acceptance criteria, non-goals, and inspectability impacts stay clear.

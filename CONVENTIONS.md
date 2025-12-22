@@ -1,5 +1,7 @@
 # Aries Coding Conventions
 
+These conventions support the architectural contract in `CONTRIBUTING.md` (inspectability, policy enforcement, determinism, domain-neutrality) and the product principles in `ROADMAP.md`. Keep contributions local-first, auditable, and composable.
+
 ## Python Style
 
 ### Formatting

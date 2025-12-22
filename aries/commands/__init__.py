@@ -9,6 +9,8 @@ from aries.commands.model import ModelCommand
 from aries.commands.clear import ClearCommand
 from aries.commands.help import HelpCommand
 from aries.commands.exit import ExitCommand
+from aries.commands.rag import RAGCommand
+from aries.commands.search import SearchCommand
 
 # Command registry
 COMMANDS: dict[str, type[BaseCommand]] = {
@@ -17,6 +19,8 @@ COMMANDS: dict[str, type[BaseCommand]] = {
     "help": HelpCommand,
     "exit": ExitCommand,
     "quit": ExitCommand,  # Alias
+    "rag": RAGCommand,
+    "search": SearchCommand,
 }
 
 

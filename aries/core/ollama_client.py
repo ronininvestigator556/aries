@@ -81,17 +81,20 @@ class OllamaClient:
         self,
         model: str,
         messages: list[dict[str, Any]],
+        *,
+        raw: bool = False,
         **kwargs: Any,
-    ) -> str:
+    ) -> Any:
         """Send chat message and get full response.
         
         Args:
             model: Model name to use.
             messages: List of message dictionaries.
+            raw: Return the full Ollama response if True.
             **kwargs: Additional parameters for Ollama.
             
         Returns:
-            Complete response text.
+            Complete response text or raw response.
             
         Raises:
             OllamaModelError: If model doesn't exist.
@@ -103,6 +106,8 @@ class OllamaClient:
                 messages=messages,
                 **kwargs,
             )
+            if raw:
+                return response
             return response["message"]["content"]
         except ollama.ResponseError as e:
             if "not found" in str(e).lower():

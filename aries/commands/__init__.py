@@ -63,7 +63,7 @@ def get_all_commands() -> dict[str, str]:
     """
     result = {}
     seen_classes = set()
-    
+
     for name, cmd_class in COMMANDS.items():
         # Resolve help lazily
         if name == "help":

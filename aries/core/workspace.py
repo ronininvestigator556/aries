@@ -14,7 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from aries.config import WorkspaceConfig
+from aries.config import ToolsConfig, WorkspaceConfig
+from aries.exceptions import FileToolError
 
 
 def _now_iso() -> str:
@@ -22,6 +23,83 @@ def _now_iso() -> str:
 
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_and_validate_path(
+    path: str | Path,
+    *,
+    workspace: "Workspace | Path | None" = None,
+    allowed_paths: Iterable[Path] | None = None,
+    denied_paths: Iterable[Path] | None = None,
+) -> Path:
+    """Resolve a path against workspace and policy constraints.
+
+    The returned path is absolute, symlinks are resolved, and the location is
+    checked against both allowed and denied path lists. Relative paths are
+    interpreted relative to the current workspace root when provided for
+    ergonomics.
+
+    Raises:
+        FileToolError: If the path is outside allowed roots or inside denied roots.
+    """
+
+    try:
+        raw_path = Path(path).expanduser()
+    except Exception as exc:  # pragma: no cover - Path construction rarely fails
+        raise FileToolError(f"Invalid path: {path}") from exc
+
+    is_relative = not raw_path.is_absolute()
+    # Prefer resolving relative paths against the workspace root for consistency
+    # across tools, artifact registration, and workspace management commands.
+    if is_relative:
+        base: Path
+        if isinstance(workspace, Workspace):
+            base = workspace.root
+        elif workspace:
+            base = Path(workspace)
+        else:
+            base = Path.cwd()
+        raw_path = base / raw_path
+
+    try:
+        resolved = raw_path.resolve(strict=False)
+    except Exception as exc:  # pragma: no cover - resolution errors are rare
+        raise FileToolError(f"Failed to resolve path: {path}") from exc
+
+    allowed_roots: list[Path] = []
+    if workspace:
+        if isinstance(workspace, Workspace):
+            base_root = workspace.root
+        else:
+            base_root = Path(workspace)
+        allowed_roots.append(base_root.expanduser().resolve())
+    if allowed_paths:
+        allowed_roots.extend(Path(p).expanduser().resolve() for p in allowed_paths)
+
+    denied_roots = [Path(p).expanduser().resolve() for p in denied_paths or []]
+
+    def _under_root(target: Path) -> bool:
+        try:
+            return resolved.is_relative_to(target)
+        except AttributeError:  # pragma: no cover - for Python <3.9 compatibility
+            return str(resolved).startswith(str(target))
+        except ValueError:
+            return False
+
+    for denied in denied_roots:
+        if _under_root(denied):
+            raise FileToolError(f"Path denied by policy: {resolved}")
+
+    if is_relative and workspace:
+        workspace_root = workspace.root if isinstance(workspace, Workspace) else Path(workspace)
+        workspace_root = workspace_root.expanduser().resolve()
+        if not _under_root(workspace_root):
+            raise FileToolError(f"Relative path escapes workspace: {resolved}")
+
+    if allowed_roots and not any(_under_root(root) for root in allowed_roots):
+        raise FileToolError(f"Path outside allowed locations: {resolved}")
+
+    return resolved
 
 
 @dataclass
@@ -217,13 +295,30 @@ class Workspace:
 class WorkspaceManager:
     """Create, open, close, and export workspaces."""
 
-    def __init__(self, config: WorkspaceConfig) -> None:
+    def __init__(self, config: WorkspaceConfig, tools_config: ToolsConfig | None = None) -> None:
         self.config = config
+        self.tools_config = tools_config
         self.root = Path(config.root).expanduser()
         self.root.mkdir(parents=True, exist_ok=True)
         self.current: Workspace | None = None
         self.logger: TranscriptLogger | None = None
         self.artifacts: ArtifactRegistry | None = None
+
+    def resolve_path(self, path: str | Path) -> Path:
+        """Resolve a path using workspace and tool policy settings."""
+
+        allowed_paths = None
+        denied_paths = None
+        if self.tools_config:
+            allowed_paths = self.tools_config.allowed_paths
+            denied_paths = self.tools_config.denied_paths
+
+        return resolve_and_validate_path(
+            path,
+            workspace=self.current,
+            allowed_paths=allowed_paths,
+            denied_paths=denied_paths,
+        )
 
     def _workspace_paths(self, name: str) -> Workspace:
         root = self.root / name
@@ -278,14 +373,14 @@ class WorkspaceManager:
     def export(self, target: Path) -> Path:
         if not self.current:
             raise RuntimeError("No active workspace to export")
-        target = Path(target).expanduser()
+        target = self.resolve_path(target)
         target.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(target, "w:gz") as tar:
             tar.add(self.current.root, arcname=self.current.root.name)
         return target
 
     def import_bundle(self, bundle: Path) -> Workspace:
-        bundle = Path(bundle).expanduser()
+        bundle = self.resolve_path(bundle)
         if not bundle.exists():
             raise FileNotFoundError(bundle)
         with tarfile.open(bundle, "r:gz") as tar:
@@ -318,7 +413,12 @@ class WorkspaceManager:
             logger.warning("Artifact hint missing path; skipping registration: %s", artifact)
             return None
 
-        path = ref.path.expanduser()
+        try:
+            path = self.resolve_path(ref.path)
+        except FileToolError as exc:
+            logger.warning("Artifact outside allowed paths ignored: %s", exc)
+            return None
+
         if not path.exists():
             logger.warning("Artifact path not found for registration: %s", path)
             return None

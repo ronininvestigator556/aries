@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from aries.config import ToolsConfig
+from aries.core.workspace import resolve_and_validate_path
 from aries.tools.base import BaseTool
 
 
@@ -26,20 +27,21 @@ class ToolPolicy:
         self.allowed_paths = [Path(p).expanduser().resolve() for p in config.allowed_paths]
         self.denied_paths = [Path(p).expanduser().resolve() for p in config.denied_paths]
 
-    def _path_allowed(self, path: str | None) -> bool:
+    def _path_allowed(self, path: str | None, workspace: Path | None) -> bool:
         if not path:
             return True
         try:
-            resolved = Path(path).expanduser().resolve()
+            resolve_and_validate_path(
+                path,
+                workspace=workspace,
+                allowed_paths=self.allowed_paths,
+                denied_paths=self.denied_paths,
+            )
+            return True
         except Exception:
             return False
-        if any(str(resolved).startswith(str(denied)) for denied in self.denied_paths):
-            return False
-        if not self.allowed_paths:
-            return True
-        return any(str(resolved).startswith(str(allowed)) for allowed in self.allowed_paths)
 
-    def evaluate(self, tool: BaseTool, args: dict[str, Any]) -> PolicyDecision:
+    def evaluate(self, tool: BaseTool, args: dict[str, Any], *, workspace: Path | None = None) -> PolicyDecision:
         risk = getattr(tool, "risk_level", "read")
         mutates_state = bool(getattr(tool, "mutates_state", False))
 
@@ -50,7 +52,7 @@ class ToolPolicy:
             return PolicyDecision(False, f"Network tools disabled by policy (risk={risk})")
 
         for path_param in getattr(tool, "path_params", ()):
-            if not self._path_allowed(args.get(path_param)):
+            if not self._path_allowed(args.get(path_param), workspace):
                 return PolicyDecision(False, f"Path access denied by policy (risk={risk})")
 
         classification = "mutating" if mutates_state else "read"

@@ -26,6 +26,7 @@ from aries.core.ollama_client import OllamaClient
 from aries.core.tool_policy import ToolPolicy
 from aries.core.profile import Profile, ProfileManager
 from aries.core.workspace import ArtifactRef, TranscriptEntry, WorkspaceManager
+from aries.exceptions import FileToolError
 from aries.core.tokenizer import TokenEstimator
 from aries.exceptions import AriesError, ConfigError
 from aries.rag.indexer import Indexer
@@ -61,7 +62,7 @@ class Aries:
         )
         self.profiles = ProfileManager(config.profiles.directory)
         self.tool_policy = ToolPolicy(config.tools)
-        self.workspace = WorkspaceManager(config.workspace)
+        self.workspace = WorkspaceManager(config.workspace, config.tools)
         self.ollama = OllamaClient(config.ollama)
         self.indexer = Indexer(config.rag, self.ollama, token_estimator=self._token_estimator)
         self.retriever = Retriever(config.rag, self.ollama)
@@ -228,7 +229,7 @@ class Aries:
             "mutates_state": bool(getattr(tool, "mutates_state", False)),
         }
 
-        decision = self.tool_policy.evaluate(tool, call.arguments)
+        decision = self.tool_policy.evaluate(tool, call.arguments, workspace=self.workspace.current.root if self.workspace.current else None)
         audit["policy_reason"] = decision.reason
         audit["policy_allowed"] = decision.allowed
         audit["duration_ms"] = 0
@@ -270,9 +271,14 @@ class Aries:
                 )
                 return result, audit
 
+        exec_args = dict(call.arguments)
+        exec_args.setdefault("workspace", self.workspace.current)
+        exec_args.setdefault("allowed_paths", self.config.tools.allowed_paths)
+        exec_args.setdefault("denied_paths", self.config.tools.denied_paths)
+
         start = time.time()
         try:
-            result = await tool.execute(**call.arguments)
+            result = await tool.execute(**exec_args)
         except Exception as e:
             result = ToolResult(success=False, content="", error=str(e))
         duration = int((time.time() - start) * 1000)
@@ -595,8 +601,13 @@ class Aries:
 
         seen_paths: set[str] = set()
         for ref in hints:
-            path = ref.path.expanduser()
-            normalized = str(path.resolve() if path.exists() else path)
+            try:
+                path = self.workspace.resolve_path(ref.path)
+            except FileToolError as exc:
+                logger.warning("Artifact outside allowed paths ignored: %s", exc)
+                continue
+
+            normalized = str(path)
             if normalized in seen_paths:
                 continue
             seen_paths.add(normalized)
@@ -604,15 +615,6 @@ class Aries:
             if not path.exists():
                 logger.warning("Artifact path not found for registration: %s", path)
                 continue
-
-            if self.workspace.current:
-                try:
-                    if not path.resolve().is_relative_to(self.workspace.current.root.resolve()):
-                        logger.warning("Artifact outside workspace ignored: %s", path)
-                        continue
-                except ValueError:
-                    logger.warning("Artifact outside workspace ignored: %s", path)
-                    continue
 
             extra = dict(ref.extra)
             description = ref.description

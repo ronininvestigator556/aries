@@ -2,6 +2,7 @@
 /rag command - Manage RAG indices.
 """
 
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,8 +17,8 @@ class RAGCommand(BaseCommand):
     """List, index, or select RAG indices."""
 
     name = "rag"
-    description = "List RAG indices, index a directory, or select an index"
-    usage = "[list|off|<index_name>|index <path> [name]]"
+    description = "List RAG indices, index a directory, inspect retrievals"
+    usage = "[list|off|<index_name>|index add <path> [name]|use <name>|drop <name>|show <handle>|last]"
 
     async def execute(self, app: "Aries", args: str) -> None:
         args = args.strip()
@@ -42,11 +43,11 @@ class RAGCommand(BaseCommand):
 
         if args.startswith("index "):
             parts = args.split()
-            if len(parts) < 2:
-                display_error("Usage: /rag index <path> [name]")
+            if len(parts) < 3 or parts[1] != "add":
+                display_error("Usage: /rag index add <path> [name]")
                 return
-            dir_path = Path(parts[1]).expanduser()
-            name = parts[2] if len(parts) > 2 else dir_path.name
+            dir_path = Path(parts[2]).expanduser()
+            name = parts[3] if len(parts) > 3 else dir_path.name
 
             try:
                 stats = await app.indexer.index_directory(dir_path, name=name)
@@ -57,6 +58,48 @@ class RAGCommand(BaseCommand):
             display_success(
                 f"Indexed {stats['documents_indexed']} documents into '{stats['name']}'"
             )
+            return
+
+        if args.startswith("use "):
+            name = args.split(maxsplit=1)[1]
+            try:
+                await app.retriever.load_index(name)
+            except Exception as exc:
+                display_error(f"Failed to load index '{name}': {exc}")
+                return
+            app.current_rag = name
+            display_success(f"RAG index set to '{name}'")
+            return
+
+        if args.startswith("drop "):
+            name = args.split(maxsplit=1)[1]
+            target = Path(app.indexer.config.indices_dir) / name
+            if not target.exists():
+                display_error(f"Index '{name}' not found.")
+                return
+            shutil.rmtree(target)
+            display_success(f"Dropped index '{name}'.")
+            if app.current_rag == name:
+                app.current_rag = None
+            return
+
+        if args.startswith("show "):
+            handle = args.split(maxsplit=1)[1]
+            chunk = app.retriever.get_handle(handle)
+            if not chunk:
+                display_error(f"Handle '{handle}' not found. Use /rag last to inspect recent retrievals.")
+                return
+            display_info(f"[{handle}] {chunk.source}\nScore: {chunk.score}\n{chunk.content}")
+            return
+
+        if args == "last":
+            handles = app.retriever.last_handles
+            if not handles:
+                display_info("No retrievals yet.")
+                return
+            display_info("Last retrieval handles:")
+            for h in handles:
+                display_info(f"- {h}")
             return
 
         # Otherwise, treat args as index name

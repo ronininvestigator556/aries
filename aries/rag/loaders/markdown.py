@@ -3,6 +3,7 @@ Markdown loader for RAG.
 """
 
 from pathlib import Path
+from datetime import datetime
 
 from aries.exceptions import DocumentLoadError
 from aries.rag.loaders.base import BaseLoader, Document
@@ -23,6 +24,12 @@ class MarkdownLoader(BaseLoader):
             Document(
                 content=content,
                 source=str(path),
-                metadata={"name": path.name},
+                metadata={
+                    "name": path.name,
+                    "source_path": str(path),
+                    "content_type": "text/markdown",
+                    "last_modified": datetime.utcfromtimestamp(path.stat().st_mtime).isoformat()
+                    + "Z",
+                },
             )
         ]

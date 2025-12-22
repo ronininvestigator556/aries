@@ -28,6 +28,25 @@ class SearchConfig(BaseModel):
     timeout: int = Field(default=30, ge=1)
 
 
+class WorkspaceConfig(BaseModel):
+    """Workspace persistence settings."""
+
+    root: Path = Path("./workspaces")
+    default: str | None = None
+    persist_by_default: bool = False
+    transcript_dirname: str = "transcripts"
+    artifact_dirname: str = "artifacts"
+    indexes_dirname: str = "indexes"
+    manifest_name: str = "workspace.json"
+
+
+class ProfilesConfig(BaseModel):
+    """Prompt/profile settings."""
+
+    directory: Path = Path("./profiles")
+    default: str = "default"
+
+
 class RAGConfig(BaseModel):
     """RAG (Retrieval Augmented Generation) settings."""
     
@@ -52,6 +71,16 @@ class ToolsConfig(BaseModel):
     shell_timeout: int = Field(default=30, ge=1)
     max_file_size_mb: int = Field(default=10, ge=1)
     allowed_extensions: list[str] = Field(default_factory=lambda: ["*"])
+    allowed_paths: list[Path] = Field(
+        default_factory=lambda: [Path.cwd()],
+        description="Paths that tools are allowed to access",
+    )
+    denied_paths: list[Path] = Field(default_factory=list)
+    allow_shell: bool = Field(default=False, description="Whether shell execution is allowed")
+    allow_network: bool = Field(default=False, description="Whether network tools are allowed")
+    confirmation_required: bool = Field(
+        default=True, description="Whether dangerous tools require confirmation"
+    )
 
 
 class ConversationConfig(BaseModel):
@@ -75,6 +104,8 @@ class Config(BaseModel):
     
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
+    profiles: ProfilesConfig = Field(default_factory=ProfilesConfig)
     rag: RAGConfig = Field(default_factory=RAGConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)

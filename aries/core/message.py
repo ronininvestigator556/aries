@@ -35,8 +35,6 @@ class ToolResultMessage:
     success: bool = True
     error: str | None = None
     name: str | None = None
-    
-    name: str | None = None
 
 
 @dataclass

@@ -146,16 +146,21 @@ class Aries:
     
     async def _run_assistant(self) -> None:
         """Run chat loop with optional tool handling."""
-        while True:
+        max_tool_iterations = 10
+        iteration = 0
+
+        while iteration < max_tool_iterations:
+            iteration += 1
             messages = self.conversation.get_messages_for_ollama()
             response = await self.ollama.chat(
                 model=self.current_model,
                 messages=messages,
                 tools=self.tool_definitions or None,
+                raw=True,
             )
-            message_payload = response.get("message", {})
+            message_payload = response.get("message", {}) if isinstance(response, dict) else {}
             tool_calls_raw = message_payload.get("tool_calls") or []
-            
+
             if tool_calls_raw:
                 tool_calls = self.conversation.parse_tool_calls(tool_calls_raw)
                 self.conversation.add_assistant_message(
@@ -164,12 +169,16 @@ class Aries:
                 )
                 await self._execute_tool_calls(tool_calls)
                 continue
-            
-            await self._stream_assistant_response()
+
+            await self._stream_assistant_response(initial_response=message_payload.get("content"))
             break
+        else:
+            display_error("Maximum tool iterations reached. Stopping.")
     
     async def _execute_tool_calls(self, tool_calls: Iterable[ToolCall]) -> None:
         """Execute tool calls requested by the assistant."""
+        max_display_chars = 2000
+
         for call in tool_calls:
             tool = self.tool_map.get(call.name)
             if tool is None:
@@ -179,6 +188,7 @@ class Aries:
                     content=f"Unknown tool: {call.name}",
                     success=False,
                     error="Unknown tool",
+                    tool_name=call.name,
                 )
                 continue
             
@@ -193,6 +203,7 @@ class Aries:
                 content=output,
                 success=result.success,
                 error=result.error,
+                tool_name=call.name,
             )
             
             if result.success:
@@ -201,9 +212,12 @@ class Aries:
                 display_error(f"Tool {call.name} failed: {result.error}")
             
             if output:
-                console.print(f"\n[dim]{call.name} output:[/dim]\n{output}\n")
+                display_output = output[:max_display_chars]
+                if len(output) > max_display_chars:
+                    display_output += f"\n... (truncated, {len(output)} total chars)"
+                console.print(f"\n[dim]{call.name} output:[/dim]\n{display_output}\n")
     
-    async def _stream_assistant_response(self) -> None:
+    async def _stream_assistant_response(self, initial_response: str | None = None) -> None:
         """Stream the assistant's final response and record it."""
         messages = self.conversation.get_messages_for_ollama()
         
@@ -214,16 +228,20 @@ class Aries:
             async for chunk in self.ollama.chat_stream(
                 model=self.current_model,
                 messages=messages,
+                tools=self.tool_definitions or None,
             ):
                 console.print(chunk, end="")
                 response_text += chunk
             
             console.print("\n")
         else:
-            response_text = await self.ollama.chat(
-                model=self.current_model,
-                messages=messages,
-            )
+            if initial_response is not None:
+                response_text = initial_response
+            else:
+                response_text = await self.ollama.chat(
+                    model=self.current_model,
+                    messages=messages,
+                )
             console.print(f"\n{response_text}\n")
         
         self.conversation.add_assistant_message(response_text)

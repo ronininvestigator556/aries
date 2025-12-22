@@ -37,6 +37,13 @@ class ToolResult:
 
 
 @dataclass
+class ToolResultMessage(ToolResult):
+    """Represents a tool result embedded in the conversation history."""
+    
+    name: str | None = None
+
+
+@dataclass
 class Message:
     """A single message in a conversation."""
     
@@ -45,7 +52,7 @@ class Message:
     timestamp: datetime = field(default_factory=datetime.now)
     tool_call_id: str | None = None
     tool_calls: list[ToolCall] | None = None
-    tool_results: list[ToolResult] | None = None
+    tool_results: list[ToolResultMessage] | None = None
     images: list[str] | None = None  # Base64-encoded images for vision models
     
     def to_ollama_format(self) -> dict[str, Any]:

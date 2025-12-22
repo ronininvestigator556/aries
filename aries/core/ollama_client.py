@@ -82,14 +82,16 @@ class OllamaClient:
         model: str,
         messages: list[dict[str, Any]],
         *,
+        tools: list[dict[str, Any]] | None = None,
         raw: bool = False,
         **kwargs: Any,
     ) -> Any:
         """Send chat message and get full response.
-        
+
         Args:
             model: Model name to use.
             messages: List of message dictionaries.
+            tools: Optional list of tool definitions for the model.
             raw: Return the full Ollama response if True.
             **kwargs: Additional parameters for Ollama.
 

@@ -34,12 +34,6 @@ class ToolResultMessage:
     content: str
     success: bool = True
     error: str | None = None
-
-
-@dataclass
-class ToolResultMessage(ToolResult):
-    """Represents a tool result embedded in the conversation history."""
-    
     name: str | None = None
 
 

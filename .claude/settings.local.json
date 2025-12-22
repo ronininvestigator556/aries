@@ -4,7 +4,8 @@
       "Bash(tree:*)",
       "Bash(if not exist prompts mkdir prompts)",
       "Bash(python -m py_compile:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(pip install:*)"
     ]
   }
 }

@@ -9,7 +9,7 @@ from typing import Any
 
 import tiktoken
 
-from aries.core.message import Message, Role, ToolCall, ToolResult
+from aries.core.message import Message, Role, ToolCall, ToolResultMessage
 
 
 class Conversation:
@@ -90,17 +90,17 @@ class Conversation:
         error: str | None = None,
     ) -> Message:
         """Add a tool result message.
-        
+
         Args:
             tool_call_id: Identifier of the originating tool call.
             content: Tool output content.
             success: Whether the tool execution succeeded.
             error: Optional error message.
-            
+
         Returns:
             The created message.
         """
-        result = ToolResult(
+        result = ToolResultMessage(
             tool_call_id=tool_call_id,
             content=content,
             success=success,

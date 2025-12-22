@@ -81,18 +81,20 @@ class OllamaClient:
         self,
         model: str,
         messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> str:
-        """Send chat message and get full response.
-        
+    ) -> dict[str, Any] | str:
+        """Send chat message and get response.
+
         Args:
             model: Model name to use.
             messages: List of message dictionaries.
+            tools: Optional list of tool definitions.
             **kwargs: Additional parameters for Ollama.
-            
+
         Returns:
-            Complete response text.
-            
+            Full response dict if tools provided, otherwise just content string.
+
         Raises:
             OllamaModelError: If model doesn't exist.
             OllamaError: If chat fails.
@@ -101,8 +103,12 @@ class OllamaClient:
             response = await self.client.chat(
                 model=model,
                 messages=messages,
+                tools=tools,
                 **kwargs,
             )
+            # Return full response when tools are provided so caller can check for tool_calls
+            if tools:
+                return response
             return response["message"]["content"]
         except ollama.ResponseError as e:
             if "not found" in str(e).lower():

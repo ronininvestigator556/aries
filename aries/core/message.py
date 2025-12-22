@@ -27,9 +27,9 @@ class ToolCall:
 
 
 @dataclass
-class ToolResult:
-    """Represents the result of a tool execution."""
-    
+class ToolResultMessage:
+    """Represents a tool result as stored in conversation history."""
+
     tool_call_id: str
     content: str
     success: bool = True
@@ -45,7 +45,7 @@ class Message:
     timestamp: datetime = field(default_factory=datetime.now)
     tool_call_id: str | None = None
     tool_calls: list[ToolCall] | None = None
-    tool_results: list[ToolResult] | None = None
+    tool_results: list[ToolResultMessage] | None = None
     images: list[str] | None = None  # Base64-encoded images for vision models
     
     def to_ollama_format(self) -> dict[str, Any]:

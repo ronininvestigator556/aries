@@ -124,6 +124,34 @@ async def test_non_emitting_tool_skips_artifact_metadata(tmp_path: Path) -> None
 
 
 @pytest.mark.anyio
+async def test_legacy_path_fallback_skipped_for_non_emitting_tool(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profiles"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "default.yaml").write_text("name: default\nsystem_prompt: default", encoding="utf-8")
+
+    config = Config()
+    config.profiles.directory = profile_dir
+    config.prompts.directory = tmp_path / "prompts"
+    config.workspace.root = tmp_path / "workspaces"
+    config.workspace.persist_by_default = True
+    config.workspace.default = "demo"
+    config.tools.allowed_paths = [tmp_path]
+    config.tools.confirmation_required = False
+
+    app = Aries(config)
+    legacy_path = config.workspace.root / "demo" / "legacy.txt"
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text("legacy artifact", encoding="utf-8")
+
+    result = ToolResult(success=True, content="ok", metadata={"path": str(legacy_path)})
+    app._maybe_register_artifact(result, app.tool_map["read_file"])
+
+    manifest_path = config.workspace.root / "demo" / "artifacts" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest == []
+
+
+@pytest.mark.anyio
 async def test_missing_artifact_path_logs_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     profile_dir = tmp_path / "profiles"
     profile_dir.mkdir(parents=True)
@@ -192,3 +220,35 @@ async def test_artifact_registered_only_once(tmp_path: Path, monkeypatch: pytest
     assert len(manifest) == 1
     assert manifest[0]["description"] == "desc"
     assert call_counts["register_file"] == 1
+
+
+@pytest.mark.anyio
+async def test_duplicate_artifact_registration_is_idempotent(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profiles"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "default.yaml").write_text("name: default\nsystem_prompt: default", encoding="utf-8")
+
+    config = Config()
+    config.profiles.directory = profile_dir
+    config.prompts.directory = tmp_path / "prompts"
+    config.workspace.root = tmp_path / "workspaces"
+    config.workspace.persist_by_default = True
+    config.workspace.default = "demo"
+    config.tools.allowed_paths = [tmp_path]
+    config.tools.confirmation_required = False
+
+    artifact_path = config.workspace.root / "demo" / "output.txt"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text("artifact data", encoding="utf-8")
+
+    app = Aries(config)
+    result = ToolResult(success=True, content="ok", metadata={"artifact": {"path": str(artifact_path)}})
+
+    app._maybe_register_artifact(result, app.tool_map["write_file"])
+    app._maybe_register_artifact(result, app.tool_map["write_file"])
+
+    manifest_path = config.workspace.root / "demo" / "artifacts" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert len(manifest) == 1
+    assert manifest[0]["path"] == str(artifact_path.resolve())

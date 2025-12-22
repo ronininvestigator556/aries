@@ -7,7 +7,10 @@ Retrieves relevant document chunks from ChromaDB based on query similarity.
 from dataclasses import dataclass
 from typing import Any
 
-import chromadb
+try:
+    import chromadb
+except ImportError:
+    chromadb = None
 
 from aries.config import RAGConfig
 from aries.core.ollama_client import OllamaClient
@@ -51,6 +54,9 @@ class Retriever:
         Returns:
             True if loaded successfully.
         """
+        if chromadb is None:
+            raise ImportError("ChromaDB is not installed. Please install it to use RAG features.")
+
         client = chromadb.PersistentClient(path=str(self.config.indices_dir))
         try:
             self._collection = client.get_collection(name=name)

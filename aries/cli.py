@@ -153,11 +153,15 @@ class Aries:
         max_tool_iterations = 10
         iteration = 0
 
+        # Get the user's query for RAG retrieval
+        last_user_msg = self.conversation.get_last_user_message()
+        user_query = last_user_msg.content if last_user_msg else ""
+
         while iteration < max_tool_iterations:
             iteration += 1
             messages = self.conversation.get_messages_for_ollama()
-            if self.current_rag:
-                context_chunks = await self._retrieve_context(message)
+            if self.current_rag and user_query:
+                context_chunks = await self._retrieve_context(user_query)
                 if context_chunks:
                     context_text = "\n\n".join(
                         f"[{chunk.source}] {chunk.content}" for chunk in context_chunks

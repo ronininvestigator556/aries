@@ -16,7 +16,7 @@ class SearchCommand(BaseCommand):
     """Perform a web search."""
 
     name = "search"
-    description = "Search the web using the configured SearXNG instance"
+    description = "Search the web using DuckDuckGo"
     usage = "<query>"
 
     async def execute(self, app: "Aries", args: str) -> None:

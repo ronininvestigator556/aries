@@ -7,7 +7,10 @@ Indexes documents into ChromaDB for later retrieval.
 from pathlib import Path
 from typing import Any
 
-import chromadb
+try:
+    import chromadb
+except ImportError:
+    chromadb = None
 
 from aries.config import RAGConfig
 from aries.exceptions import DocumentLoadError, IndexError
@@ -152,8 +155,11 @@ class Indexer:
 
         return documents
 
-    def _get_client(self) -> chromadb.ClientAPI:
+    def _get_client(self) -> "chromadb.ClientAPI":
         """Create a ChromaDB client using configured indices directory."""
+        if chromadb is None:
+            raise ImportError("ChromaDB is not installed. Please install it to use RAG features.")
+            
         indices_dir = Path(self.config.indices_dir)
         indices_dir.mkdir(parents=True, exist_ok=True)
         return chromadb.PersistentClient(path=str(indices_dir))

@@ -33,12 +33,18 @@ The codebase now includes the Phase 1 MVP plus the first Phase 2 capabilities:
    - Ensure `ollama serve` is running locally.
    - Update `config.yaml` (or copy `config.example.yaml`) with your Ollama host and default model.
 
-3. **Run Aries**
+3. **(Optional) Setup Search**
+   - Aries uses SearXNG for web search. You can run it easily with Docker:
+     ```bash
+     docker run -d -p 8080:8080 --name searxng searxng/searxng
+     ```
+
+4. **Run Aries**
    ```bash
    python -m aries
    ```
 
-4. **Use commands**
+5. **Use commands**
    - `/model list` — show available models.
    - `/model <name>` — switch models.
    - `/help` — list commands.

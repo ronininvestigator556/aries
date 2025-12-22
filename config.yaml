@@ -1,39 +1,47 @@
 # Aries Configuration
+# Copy to config.yaml and customize
 
+# Ollama settings
 ollama:
   host: "http://localhost:11434"
   default_model: "llama3.2"
   embedding_model: "nomic-embed-text"
   timeout: 120
 
+# SearXNG web search settings
 search:
   searxng_url: "http://localhost:8080"
   default_results: 5
   timeout: 30
 
+# RAG settings
 rag:
   chunk_size: 500
   chunk_overlap: 50
   top_k: 5
   indices_dir: "./indices"
 
+# UI settings
 ui:
   theme: "dark"
   stream_output: true
   show_thinking: false
   max_history_display: 50
 
+# Tool settings
 tools:
   shell_timeout: 30
   max_file_size_mb: 10
   allowed_extensions:
     - "*"
 
+# Conversation context settings
 conversation:
   max_context_tokens: 4096
   max_messages: 100
   encoding: "cl100k_base"
 
+# Prompts settings
 prompts:
   directory: "./prompts"
   default: "default"

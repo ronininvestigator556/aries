@@ -1,20 +1,21 @@
 """
-Web search tool using SearXNG.
+Web search tool using DuckDuckGo.
 """
 
+import asyncio
 from typing import Any
 
-import aiohttp
+from ddgs import DDGS
 
 from aries.config import get_config
 from aries.tools.base import BaseTool, ToolResult
 
 
 class WebSearchTool(BaseTool):
-    """Perform a web search via SearXNG."""
+    """Perform a web search via DuckDuckGo."""
 
     name = "search_web"
-    description = "Search the web using the configured SearXNG instance"
+    description = "Search the web using DuckDuckGo"
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -37,23 +38,25 @@ class WebSearchTool(BaseTool):
     async def execute(self, query: str, num_results: int | None = None, **_: Any) -> ToolResult:
         config = get_config().search
         limit = num_results or config.default_results
-        url = f"{config.searxng_url}/search"
-        params = {"q": query, "format": "json", "limit": limit}
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=config.timeout) as resp:
-                    if resp.status != 200:
-                        return ToolResult(
-                            success=False,
-                            content="",
-                            error=f"SearXNG returned status {resp.status}",
-                        )
-                    data = await resp.json()
+            # Use asyncio.to_thread because DDGS is a synchronous library
+            with DDGS() as ddgs:
+                results = await asyncio.to_thread(
+                    lambda: list(ddgs.text(query, max_results=limit))
+                )
         except Exception as exc:
-            return ToolResult(success=False, content="", error=str(exc))
+            return ToolResult(success=False, content="", error=f"DuckDuckGo search failed: {exc}")
 
-        results = data.get("results", [])[:limit]
-        lines = [f"{item.get('title','')} - {item.get('url','')}" for item in results]
-        content = "\n".join(lines) if lines else "No results."
+        if not results:
+            return ToolResult(success=True, content="No results found.", metadata={"results": []})
+
+        lines = []
+        for item in results:
+            title = item.get("title", "No Title")
+            href = item.get("href", "No URL")
+            body = item.get("body", "")
+            lines.append(f"### {title}\nURL: {href}\n{body}\n")
+
+        content = "\n".join(lines)
         return ToolResult(success=True, content=content, metadata={"results": results})

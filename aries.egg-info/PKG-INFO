@@ -63,6 +63,7 @@ The codebase now includes the Phase 1 MVP plus the first Phase 2 capabilities:
    ```bash
    pip install -e .
    ```
+   > If you see `ModuleNotFoundError` (e.g., for `aiofiles`), ensure you ran the install step from your project root.
 
 2. **Configure Ollama**
    - Ensure `ollama serve` is running locally.

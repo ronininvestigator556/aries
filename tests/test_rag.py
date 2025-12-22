@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+try:
+    import chromadb
+except ImportError:
+    chromadb = None
 
 from aries.config import RAGConfig
 from aries.core.ollama_client import OllamaClient
@@ -18,6 +24,7 @@ class DummyOllama(OllamaClient):
         return [float(len(text))]
 
 
+@pytest.mark.skipif(chromadb is None, reason="ChromaDB not installed")
 @pytest.mark.anyio
 async def test_index_and_retrieve(tmp_path: Path):
     cfg = RAGConfig(indices_dir=tmp_path, top_k=2)

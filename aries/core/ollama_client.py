@@ -47,7 +47,31 @@ class OllamaClient:
         """
         try:
             response = await self.client.list()
-            return response.get("models", [])
+            # Handle object response (new ollama lib) or dict response (old)
+            if hasattr(response, "models"):
+                models = response.models
+            else:
+                models = response.get("models", [])
+            
+            # Convert to dicts if they are objects
+            result = []
+            for m in models:
+                if hasattr(m, "model"):
+                    # Object with .model attribute
+                    model_dict = {
+                        "name": m.model,
+                        "modified_at": getattr(m, "modified_at", None),
+                        "size": getattr(m, "size", 0),
+                        "digest": getattr(m, "digest", ""),
+                        "details": getattr(m, "details", {}),
+                    }
+                    result.append(model_dict)
+                elif isinstance(m, dict):
+                    # Already a dict, ensure 'name' key exists (map 'model' to 'name' if needed)
+                    if "model" in m and "name" not in m:
+                        m["name"] = m["model"]
+                    result.append(m)
+            return result
         except Exception as e:
             raise OllamaConnectionError(f"Failed to list models: {e}") from e
     
@@ -82,6 +106,7 @@ class OllamaClient:
         model: str,
         messages: list[dict[str, Any]],
         *,
+        tools: list[dict[str, Any]] | None = None,
         raw: bool = False,
         **kwargs: Any,
     ) -> Any:
@@ -90,6 +115,7 @@ class OllamaClient:
         Args:
             model: Model name to use.
             messages: List of message dictionaries.
+            tools: Optional list of tools to provide to the model.
             raw: Return the full Ollama response if True.
             **kwargs: Additional parameters for Ollama.
 

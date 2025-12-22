@@ -24,6 +24,7 @@ from aries.core.conversation import Conversation
 from aries.core.message import ToolCall
 from aries.core.ollama_client import OllamaClient
 from aries.core.tool_policy import ToolPolicy
+from aries.core.tool_registry import ToolRegistry
 from aries.core.profile import Profile, ProfileManager
 from aries.core.workspace import ArtifactRef, TranscriptEntry, WorkspaceManager
 from aries.exceptions import FileToolError
@@ -31,7 +32,7 @@ from aries.core.tokenizer import TokenEstimator
 from aries.exceptions import AriesError, ConfigError
 from aries.rag.indexer import Indexer
 from aries.rag.retriever import Retriever
-from aries.tools import get_all_tools
+from aries.providers import CoreProvider
 from aries.tools.base import BaseTool, ToolResult
 from aries.ui.display import display_error, display_info, display_warning, display_welcome
 from aries.ui.input import get_user_input
@@ -52,9 +53,11 @@ class Aries:
         """
         self.config = config
         self._warnings_shown: set[str] = set()
-        self.tools: list[BaseTool] = get_all_tools()
+        self.tool_registry = ToolRegistry()
+        self.tool_registry.register_provider(CoreProvider())
+        self.tools: list[BaseTool] = self.tool_registry.list_tools()
         self.tool_definitions = [tool.to_ollama_format() for tool in self.tools]
-        self.tool_map: dict[str, BaseTool] = {tool.name: tool for tool in self.tools}
+        self.tool_map: dict[str, BaseTool] = self.tool_registry.tools
         self._token_estimator = TokenEstimator(
             mode=config.tokens.mode,
             encoding=config.tokens.encoding,
@@ -227,6 +230,8 @@ class Aries:
             "input": self._sanitize_arguments(call.arguments),
             "risk_level": getattr(tool, "risk_level", "read"),
             "mutates_state": bool(getattr(tool, "mutates_state", False)),
+            "provider_id": getattr(tool, "provider_id", ""),
+            "provider_version": getattr(tool, "provider_version", ""),
         }
 
         decision = self.tool_policy.evaluate(tool, call.arguments, workspace=self.workspace.current.root if self.workspace.current else None)
@@ -500,6 +505,8 @@ class Aries:
                 msg_id=str(uuid.uuid4()),
                 extra={
                     "tool_name": call.name,
+                    "provider_id": getattr(tool, "provider_id", ""),
+                    "provider_version": getattr(tool, "provider_version", ""),
                     "status": "success" if result.success else "fail",
                     "duration_ms": audit.get("duration_ms"),
                     "input": audit.get("input"),

@@ -23,6 +23,8 @@ class BaseTool(ABC):
     
     name: str = ""
     description: str = ""
+    provider_id: str = ""
+    provider_version: str = ""
     mutates_state: bool = False
     emits_artifacts: bool = False
     risk_level: Literal["read", "write", "exec"] = "read"

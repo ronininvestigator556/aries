@@ -88,6 +88,12 @@ class PolicyCommand(BaseCommand):
 
         allowlist = getattr(app.config.tools, "allowlist", None) or getattr(app.config.tools, "allowed_tools", None)
         denylist = getattr(app.config.tools, "denylist", None) or getattr(app.config.tools, "denied_tools", None)
+        providers = app.tool_registry.providers if hasattr(app, "tool_registry") else {}
+        tools_by_provider = app.tool_registry.tools_by_provider() if hasattr(app, "tool_registry") else {}
+        provider_lines = [
+            f"{pid} (v{getattr(provider, 'provider_version', 'unknown')}): {len(tools_by_provider.get(pid, []))} tools"
+            for pid, provider in sorted(providers.items())
+        ]
 
         table = Table.grid(padding=(0, 1))
         table.add_row("Workspace:", workspace_label)
@@ -95,6 +101,8 @@ class PolicyCommand(BaseCommand):
         table.add_row("Tokens:", tokens_text)
         table.add_row("Tool enablement:", f"allow_shell={app.config.tools.allow_shell}, allow_network={app.config.tools.allow_network}")
         table.add_row("Confirmation:", "; ".join(confirmation_lines))
+        if provider_lines:
+            table.add_row("Providers:", "; ".join(provider_lines))
         table.add_row("Allowed roots:", ", ".join(allow_roots) if allow_roots else "none")
         table.add_row("Denied roots:", ", ".join(deny_roots) if deny_roots else "none")
         if allowlist:
@@ -156,6 +164,8 @@ class PolicyCommand(BaseCommand):
 
         meta_table = Table.grid(padding=(0, 1))
         meta_table.add_row("Tool:", tool.name)
+        meta_table.add_row("Provider:", getattr(tool, "provider_id", "unknown"))
+        meta_table.add_row("Provider version:", getattr(tool, "provider_version", "unknown"))
         meta_table.add_row("Risk level:", getattr(tool, "risk_level", "unknown"))
         meta_table.add_row(
             "Capabilities:",

@@ -1,0 +1,34 @@
+# Aries Configuration
+
+ollama:
+  host: "http://localhost:11434"
+  default_model: "llama3.2"
+  embedding_model: "nomic-embed-text"
+  timeout: 120
+
+search:
+  searxng_url: "http://localhost:8080"
+  default_results: 5
+  timeout: 30
+
+rag:
+  chunk_size: 500
+  chunk_overlap: 50
+  top_k: 5
+  indices_dir: "./indices"
+
+ui:
+  theme: "dark"
+  stream_output: true
+  show_thinking: false
+  max_history_display: 50
+
+tools:
+  shell_timeout: 30
+  max_file_size_mb: 10
+  allowed_extensions:
+    - "*"
+
+prompts:
+  directory: "./prompts"
+  default: "default"

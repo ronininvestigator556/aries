@@ -1,0 +1,124 @@
+[project]
+name = "aries"
+version = "0.1.0"
+description = "AI Research & Investigation Enhancement System - Terminal-based AI assistant with local LLMs"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Alex" }
+]
+keywords = ["ai", "llm", "ollama", "rag", "terminal", "assistant"]
+
+dependencies = [
+    # CLI/TUI
+    "textual>=0.47.0",
+    "rich>=13.7.0",
+    "prompt-toolkit>=3.0.43",
+    
+    # Ollama
+    "ollama>=0.3.0",
+    
+    # Async
+    "aiofiles>=23.2.1",
+    "aiohttp>=3.9.0",
+    "httpx>=0.27.0",
+    
+    # RAG - Vector Store
+    "chromadb>=0.4.22",
+    
+    # RAG - Document Loading
+    "pypdf>=4.0.0",
+    "ebooklib>=0.18",
+    "unstructured>=0.12.0",
+    "beautifulsoup4>=4.12.0",
+    
+    # Configuration
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "pyyaml>=6.0.1",
+    
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "tiktoken>=0.5.2",  # Token counting
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "black>=24.0.0",
+    "isort>=5.13.0",
+    "ruff>=0.2.0",
+    "pyright>=1.1.350",
+    "pre-commit>=3.6.0",
+]
+
+[project.scripts]
+aries = "aries.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aries*"]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.venv
+    | build
+    | dist
+    | indices
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+skip = [".git", ".venv", "build", "dist", "indices"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+]
+exclude = [
+    ".git",
+    ".venv",
+    "build",
+    "dist",
+    "indices",
+]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+include = ["aries"]
+exclude = ["**/node_modules", "**/.venv", "build", "dist", "indices"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

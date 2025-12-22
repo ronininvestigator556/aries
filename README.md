@@ -25,7 +25,7 @@ Core capabilities already in the codebase include:
 - **Ollama integration**: Lists models, switches active models, and streams chat responses.
 - **Commands**: `/model`, `/help`, `/clear`, `/exit`, `/rag` (index/select/inspect), `/workspace` (new/open/list/export/import), `/profile` (list/use/show), and `/search` (SearXNG web search).
 - **Conversation management**: Tracks history, tool calls/results, and prunes context by message count and token budget.
-- **Tools**: File read/write/list, shell execution, image loading for vision models, and SearXNG web search with audit-friendly logging expectations.
+- **Tools**: File read/write/list, shell execution, image loading for vision models, and SearXNG web search with audit-friendly logging expectations, all sourced from the built-in **core provider** (future providers will plug into the same registry).
 - **Configuration**: YAML-backed config with defaults for Ollama, UI, tools, prompts, and conversation limits.
 - **RAG (early)**: Text/Markdown/PDF/EPUB loaders, token-aware chunking, ChromaDB indexing, Ollama embeddings, `/rag` command to index/select, and automatic context injection when an index is active.
 - **Tests**: Automated coverage for configuration, conversation behavior, Ollama client stubs, tools, chunker, and RAG indexing/retrieval (`pytest`).
@@ -74,7 +74,7 @@ Core capabilities already in the codebase include:
 
 ### Tool-calling
 
-Models that support function/tool calls can invoke the registered tools:
+Models that support function/tool calls can invoke the registered tools. Aries loads these tools from providers via a registry; today only the core provider ships with the app, and future providers (e.g., MCP) will extend the same mechanism without changing policy behavior.
 
 - `read_file`, `write_file`, `list_directory`
 - `execute_shell`

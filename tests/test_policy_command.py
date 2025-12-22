@@ -38,6 +38,7 @@ async def test_policy_show_displays_status(tmp_path: Path, capsys: pytest.Captur
     assert "Workspace:" in output
     assert "allow_shell=True" in output
     assert "allow_network=True" in output
+    assert "Providers:" in output
 
 
 @pytest.mark.anyio
@@ -54,6 +55,8 @@ async def test_policy_explain_allows_known_tool(tmp_path: Path, capsys: pytest.C
     output = capsys.readouterr().out
     assert "Policy result:" in output
     assert "ALLOW" in output
+    assert "Provider:" in output
+    assert "Provider version:" in output
     assert "Confirmation required:" in output
 
 

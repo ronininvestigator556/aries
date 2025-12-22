@@ -1,0 +1,32 @@
+Research Notes - December 2025
+
+Topic: Large Language Models
+
+Key Points:
+- LLMs are trained on massive amounts of text data
+- Transformer architecture revolutionized natural language processing
+- Self-attention mechanism allows models to weigh importance of different words
+- Pre-training on general text, then fine-tuning for specific tasks
+- Common models: GPT (OpenAI), Claude (Anthropic), LLaMA (Meta)
+
+Challenges:
+- High computational costs for training and inference
+- Hallucinations - models sometimes generate plausible but incorrect information
+- Bias in training data can lead to biased outputs
+- Context window limitations
+- Difficulty in reasoning and multi-step problem solving
+
+Future Directions:
+- Multimodal models (text, images, audio)
+- More efficient architectures
+- Better reasoning capabilities
+- Reduced hallucinations
+- Smaller models with comparable performance
+
+Applications:
+- Code generation and assistance
+- Content creation and editing
+- Question answering systems
+- Language translation
+- Summarization
+- Customer support automation

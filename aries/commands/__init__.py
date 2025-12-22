@@ -12,6 +12,7 @@ from aries.commands.rag import RAGCommand
 from aries.commands.search import SearchCommand
 from aries.commands.workspace import WorkspaceCommand
 from aries.commands.profile import ProfileCommand
+from aries.commands.policy import PolicyCommand
 
 # Command registry. The help command is resolved lazily to avoid circular import.
 COMMANDS: dict[str, type[BaseCommand] | None] = {
@@ -24,6 +25,7 @@ COMMANDS: dict[str, type[BaseCommand] | None] = {
     "search": SearchCommand,
     "workspace": WorkspaceCommand,
     "profile": ProfileCommand,
+    "policy": PolicyCommand,
 }
 
 

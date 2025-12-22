@@ -353,6 +353,13 @@ prompts:
 - [ ] Session persistence
 - [ ] Advanced TUI (panels, layouts)
 
+### Phase 5: MCP Integration (Priority: FUTURE)
+
+- [ ] MCP Server Compatibility
+- [ ] Integration with desktop-commander
+- [ ] Integration with Playwright for browser automation
+- [ ] Enhanced file handling and navigation
+
 ## Development Guidelines
 
 ### When Working on This Project

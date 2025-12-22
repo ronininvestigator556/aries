@@ -20,6 +20,7 @@ The codebase now includes the Phase 1 MVP plus the first Phase 2 capabilities:
 - Advanced TUI layout, richer prompt management, and conversation persistence.
 - Additional RAG features (multi-format chunking strategies, better metadata, scoring).
 - Further web search/result formatting and multi-tool orchestration.
+- MCP (Model Context Protocol) Server Compatibility: Integration with tools like desktop-commander and Playwright to enhance file handling/navigation and automate browser activities.
 
 ## Quick start
 

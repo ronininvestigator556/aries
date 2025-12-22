@@ -25,7 +25,7 @@ from aries.core.message import ToolCall
 from aries.core.ollama_client import OllamaClient
 from aries.core.tool_policy import ToolPolicy
 from aries.core.profile import Profile, ProfileManager
-from aries.core.workspace import TranscriptEntry, WorkspaceManager
+from aries.core.workspace import ArtifactRef, TranscriptEntry, WorkspaceManager
 from aries.core.tokenizer import TokenEstimator
 from aries.exceptions import AriesError, ConfigError
 from aries.rag.indexer import Indexer
@@ -573,31 +573,29 @@ class Aries:
 
         metadata = result.metadata or {}
         artifact_meta = metadata.get("artifact")
-        hints: list[dict[str, Any]] = []
-        if isinstance(artifact_meta, dict):
-            hints.append({k: v for k, v in artifact_meta.items() if v is not None})
-        elif isinstance(artifact_meta, list):
-            hints.extend([h for h in artifact_meta if isinstance(h, dict)])
-        elif artifact_meta:
-            hints.append({"path": str(artifact_meta)})
+        hints: list[ArtifactRef] = []
+        if isinstance(artifact_meta, list):
+            hints.extend([ref for ref in (ArtifactRef.from_hint(h) for h in artifact_meta) if ref])
+        else:
+            ref = ArtifactRef.from_hint(artifact_meta)
+            if ref:
+                hints.append(ref)
 
         if result.artifacts:
-            hints.extend([h for h in result.artifacts if isinstance(h, dict)])
+            hints.extend([ref for ref in (ArtifactRef.from_hint(h) for h in result.artifacts) if ref])
 
         legacy_path = metadata.get("path")
         if legacy_path:
-            hints.append({"path": str(legacy_path)})
+            legacy_ref = ArtifactRef.from_hint({"path": legacy_path})
+            if legacy_ref:
+                hints.append(legacy_ref)
 
         if not hints:
             return
 
         seen_paths: set[str] = set()
-        for hint in hints:
-            path_value = hint.get("path")
-            if not path_value:
-                continue
-
-            path = Path(path_value).expanduser()
+        for ref in hints:
+            path = ref.path.expanduser()
             normalized = str(path.resolve() if path.exists() else path)
             if normalized in seen_paths:
                 continue
@@ -616,9 +614,20 @@ class Aries:
                     logger.warning("Artifact outside workspace ignored: %s", path)
                     continue
 
-            extra = {k: v for k, v in hint.items() if k not in {"path"} and v is not None}
-            description = extra.pop("description", None)
-            source = extra.pop("source", None) or tool.name
+            extra = dict(ref.extra)
+            description = ref.description
+            source = ref.source or tool.name
+            if ref.name:
+                extra.setdefault("name", ref.name)
+            if ref.mime:
+                extra.setdefault("mime", ref.mime)
+            if ref.type:
+                extra.setdefault("type", ref.type)
+            if ref.size_bytes is not None:
+                extra.setdefault("size_bytes", ref.size_bytes)
+            if ref.hash:
+                extra.setdefault("hash", ref.hash)
+
             registry.register_file(path, description=description, source=source, extra=extra)
 
     def _apply_workspace_index_path(self) -> None:

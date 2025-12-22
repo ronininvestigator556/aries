@@ -48,6 +48,64 @@ class TranscriptEntry:
         return json.dumps(payload, ensure_ascii=False)
 
 
+@dataclass
+class ArtifactRef:
+    """Structured artifact reference."""
+
+    path: Path
+    description: str | None = None
+    source: str | None = None
+    name: str | None = None
+    mime: str | None = None
+    type: str | None = None
+    size_bytes: int | None = None
+    hash: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_hint(cls, hint: Any) -> "ArtifactRef | None":
+        """Create an ArtifactRef from a hint object."""
+
+        if isinstance(hint, cls):
+            return hint
+
+        if isinstance(hint, (str, Path)):
+            return cls(path=Path(hint))
+
+        if not isinstance(hint, dict):
+            return None
+
+        path_value = hint.get("path")
+        if not path_value:
+            return None
+
+        known_keys = {
+            "path",
+            "description",
+            "source",
+            "name",
+            "mime",
+            "mime_type",
+            "type",
+            "size_bytes",
+            "hash",
+        }
+
+        extra = {k: v for k, v in hint.items() if k not in known_keys and v is not None}
+
+        return cls(
+            path=Path(path_value),
+            description=hint.get("description"),
+            source=hint.get("source"),
+            name=hint.get("name"),
+            mime=hint.get("mime") or hint.get("mime_type"),
+            type=hint.get("type"),
+            size_bytes=hint.get("size_bytes"),
+            hash=hint.get("hash"),
+            extra=extra,
+        )
+
+
 class TranscriptLogger:
     """Append-only NDJSON transcript writer."""
 
@@ -82,6 +140,13 @@ class ArtifactRegistry:
         temp_path = self.manifest_path.with_suffix(".tmp")
         temp_path.write_text(json.dumps(list(records), indent=2), encoding="utf-8")
         temp_path.replace(self.manifest_path)
+
+    def _dedupe_key(self, record: dict[str, Any]) -> tuple[str, str, int | None]:
+        """Compute deduplication key for a manifest record."""
+        hash_value = record.get("hash")
+        if hash_value:
+            return ("hash", hash_value, record.get("path", ""))
+        return ("size", record.get("path", ""), record.get("size_bytes"))
 
     def register_file(
         self,
@@ -123,8 +188,10 @@ class ArtifactRegistry:
         }
 
         manifest = self._read_manifest()
-        if any(r.get("hash") == record["hash"] for r in manifest):
-            return record
+        new_key = self._dedupe_key(record)
+        for existing in manifest:
+            if self._dedupe_key(existing) == new_key:
+                return existing
 
         manifest.append(record)
         self._write_manifest(manifest)
@@ -246,26 +313,26 @@ class WorkspaceManager:
         if not self.artifacts:
             return None
 
-        hint = {"path": str(artifact)} if isinstance(artifact, Path) else dict(artifact)
-        path_value = hint.get("path")
-        if not path_value:
-            logger.warning("Artifact hint missing path; skipping registration: %s", hint)
+        ref = ArtifactRef.from_hint(artifact)
+        if not ref:
+            logger.warning("Artifact hint missing path; skipping registration: %s", artifact)
             return None
 
-        path = Path(path_value).expanduser()
+        path = ref.path.expanduser()
         if not path.exists():
             logger.warning("Artifact path not found for registration: %s", path)
             return None
 
         extra = {
-            "description": hint.get("description"),
-            "source": hint.get("source"),
-            "name": hint.get("name") or path.name,
-            "mime": hint.get("mime"),
-            "type": hint.get("type"),
-            "size_bytes": hint.get("size_bytes"),
-            "hash": hint.get("hash"),
+            "description": ref.description,
+            "source": ref.source,
+            "name": ref.name or path.name,
+            "mime": ref.mime,
+            "type": ref.type,
+            "size_bytes": ref.size_bytes,
+            "hash": ref.hash,
         }
+        extra.update(ref.extra)
         return self.artifacts.register_file(
             path,
             description=extra.pop("description"),

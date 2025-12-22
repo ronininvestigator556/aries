@@ -23,6 +23,10 @@ class TokenEstimator:
     def __post_init__(self) -> None:
         self._encoder = None
         self._warned = False
+        self.mode = (self.mode or "approx").lower()
+        if self.mode not in {"tiktoken", "approx", "disabled"}:
+            self._warn_once(f"Unknown token counting mode '{self.mode}'; falling back to approximate mode.")
+            self.mode = "approx"
         if self.mode == "tiktoken":
             self._encoder = self._init_tiktoken()
 

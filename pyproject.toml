@@ -116,7 +116,6 @@ include = ["aries"]
 exclude = ["**/node_modules", "**/.venv", "build", "dist", "indices"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-v --tb=short"
 filterwarnings = [

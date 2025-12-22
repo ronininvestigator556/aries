@@ -29,6 +29,11 @@ tools:
   allowed_extensions:
     - "*"
 
+conversation:
+  max_context_tokens: 4096
+  max_messages: 100
+  encoding: "cl100k_base"
+
 prompts:
   directory: "./prompts"
   default: "default"

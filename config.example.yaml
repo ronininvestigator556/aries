@@ -35,6 +35,12 @@ tools:
   allowed_extensions:
     - "*"
 
+# Conversation context settings
+conversation:
+  max_context_tokens: 4096
+  max_messages: 100
+  encoding: "cl100k_base"
+
 # Prompts settings
 prompts:
   directory: "./prompts"

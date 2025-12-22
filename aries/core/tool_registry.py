@@ -50,6 +50,8 @@ class ToolRegistry:
         for tool in new_tools:
             setattr(tool, "provider_id", provider.provider_id)
             setattr(tool, "provider_version", provider.provider_version)
+            if hasattr(provider, "server_id") and not getattr(tool, "server_id", None):
+                setattr(tool, "server_id", getattr(provider, "server_id"))
             self._tools[tool.name] = tool
 
     def resolve(self, name: str) -> BaseTool | None:

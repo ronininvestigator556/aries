@@ -18,6 +18,13 @@ def test_default_config_contains_conversation_section(tmp_path: Path) -> None:
     assert config.conversation.max_context_tokens > 0
 
 
+def test_default_config_includes_disabled_mcp() -> None:
+    config = Config()
+    assert config.providers.mcp.enabled is False
+    assert config.providers.mcp.require is False
+    assert config.providers.mcp.servers == []
+
+
 def test_legacy_prompts_default_migrates_to_profile() -> None:
     migrated, warnings = migrate_config_data({"prompts": {"default": "legacy"}})
     assert migrated["profiles"]["default"] == "legacy"

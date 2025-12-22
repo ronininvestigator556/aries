@@ -25,7 +25,7 @@ Core capabilities already in the codebase include:
 - **Ollama integration**: Lists models, switches active models, and streams chat responses.
 - **Commands**: `/model`, `/help`, `/clear`, `/exit`, `/rag` (index/select/inspect), `/workspace` (new/open/list/export/import), `/profile` (list/use/show), and `/search` (SearXNG web search).
 - **Conversation management**: Tracks history, tool calls/results, and prunes context by message count and token budget.
-- **Tools**: File read/write/list, shell execution, image loading for vision models, and SearXNG web search with audit-friendly logging expectations, all sourced from the built-in **core provider** (future providers will plug into the same registry).
+- **Tools**: File read/write/list, shell execution, image loading for vision models, and SearXNG web search with audit-friendly logging expectations, all sourced from the built-in **core provider** (optional MCP providers plug into the same registry).
 - **Configuration**: YAML-backed config with defaults for Ollama, UI, tools, prompts, and conversation limits.
 - **RAG (early)**: Text/Markdown/PDF/EPUB loaders, token-aware chunking, ChromaDB indexing, Ollama embeddings, `/rag` command to index/select, and automatic context injection when an index is active.
 - **Tests**: Automated coverage for configuration, conversation behavior, Ollama client stubs, tools, chunker, and RAG indexing/retrieval (`pytest`).
@@ -35,7 +35,7 @@ Core capabilities already in the codebase include:
 - Advanced TUI layout and richer prompt management UX.
 - Additional RAG features (multi-format chunking strategies, better metadata, scoring).
 - Further web search/result formatting and multi-tool orchestration.
-- MCP (Model Context Protocol) provider layer and bounded planner per the roadmap.
+- Bounded planner/orchestration layer for complex flows.
 
 ## Quick start
 
@@ -74,7 +74,7 @@ Core capabilities already in the codebase include:
 
 ### Tool-calling
 
-Models that support function/tool calls can invoke the registered tools. Aries loads these tools from providers via a registry; today only the core provider ships with the app, and future providers (e.g., MCP) will extend the same mechanism without changing policy behavior.
+Models that support function/tool calls can invoke the registered tools. Aries loads these tools from providers via a registry; the core provider is always present, and optional MCP providers can be configured without changing policy behavior.
 
 - `read_file`, `write_file`, `list_directory`
 - `execute_shell`
@@ -109,6 +109,18 @@ Key sections in `config.yaml`:
 - `tools`: shell timeout, max file size, allowed extensions, path allow/deny lists, `allow_shell`, `allow_network`, and `confirmation_required` for mutating tools.
 - `workspace`: persistence root, default workspace, and directory names for transcripts/artifacts/indexes (artifact manifests live under `artifacts/manifest.json`).
 - `profiles`: profile directory, default profile name, and `require` to disable legacy prompt fallback in production.
+- `providers.mcp`: optional Model Context Protocol servers. MCP tools appear in `/policy show`/`/policy explain` and use the same ToolPolicy and confirmation gates as built-in tools. Minimal example:
+  ```yaml
+  providers:
+    mcp:
+      enabled: true
+      require: false
+      servers:
+        - id: "mcp-local"
+          url: "http://localhost:9000"
+          # or: command: ["python", "-m", "your_mcp_server"]
+          timeout_seconds: 10
+  ```
 - `tokens`: token counting mode (`approx` by default for offline safety, `tiktoken` with a warning-and-fallback, or `disabled`), plus encoding and character-per-token heuristic.
 - `conversation`: max context tokens and message count for pruning.
 - `prompts`: directory and default prompt name (legacy fallback; Aries will migrate `prompts.default` to `profiles.default` with a warning).

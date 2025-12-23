@@ -5,10 +5,12 @@ from typing import Any
 
 import pytest
 
-try:
-    import chromadb
-except ImportError:
-    chromadb = None
+chromadb = pytest.importorskip(
+    "chromadb", reason="ChromaDB not installed (install with aries[rag])"
+)
+pytest.importorskip("pypdf", reason="PDF support requires aries[rag]")
+pytest.importorskip("ebooklib", reason="EPUB support requires aries[rag]")
+pytest.importorskip("bs4", reason="HTML parsing requires aries[rag]")
 
 from aries.config import RAGConfig
 from aries.core.ollama_client import OllamaClient
@@ -24,7 +26,6 @@ class DummyOllama(OllamaClient):
         return [float(len(text))]
 
 
-@pytest.mark.skipif(chromadb is None, reason="ChromaDB not installed")
 @pytest.mark.anyio
 async def test_index_and_retrieve(tmp_path: Path):
     cfg = RAGConfig(indices_dir=tmp_path, top_k=2)

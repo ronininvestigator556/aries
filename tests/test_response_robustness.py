@@ -138,3 +138,40 @@ async def test_missing_tool_name(aries_app):
     last_msg = aries_app.conversation.messages[-1]
     assert last_msg.role == "tool"
     assert last_msg.tool_results[0].error == TOOL_CALL_PARSE_ERROR
+
+@pytest.mark.asyncio
+async def test_stream_whitespace_only_warns_without_blank_lines(aries_app, capsys):
+    aries_app.conversation.add_user_message("test")
+    aries_app.ollama.chat.return_value = {"message": {"content": ""}}
+
+    async def whitespace_stream(*_, **__):
+        for chunk in ["\n", "   ", "\n\n"]:
+            yield chunk
+
+    aries_app.ollama.chat_stream = whitespace_stream
+
+    await aries_app._run_assistant()
+
+    captured = capsys.readouterr().out
+    assert "Model returned an empty response" in captured
+    assert "\n\n\n" not in captured
+    assert aries_app.last_model_turn is not None
+    assert aries_app.last_model_turn.get("stripped_response_length") == 0
+
+@pytest.mark.asyncio
+async def test_stream_suppresses_leading_whitespace_then_streams(aries_app, capsys):
+    aries_app.conversation.add_user_message("test")
+    aries_app.ollama.chat.return_value = {"message": {"content": ""}}
+
+    async def mixed_stream(*_, **__):
+        for chunk in ["\n\n", "  ", "Hello", " world"]:
+            yield chunk
+
+    aries_app.ollama.chat_stream = mixed_stream
+
+    await aries_app._run_assistant()
+
+    captured = capsys.readouterr().out
+    assert captured.startswith("\nHello")
+    assert "Hello world" in captured
+    assert not captured.startswith("\n\n")

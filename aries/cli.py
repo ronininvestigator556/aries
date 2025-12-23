@@ -143,6 +143,7 @@ class Aries:
         self.last_action_summary: str = "Ready"
         self.last_action_details: dict[str, Any] | None = None
         self.last_action_status: str = "Idle"
+        self.last_model_turn: dict[str, Any] | None = None
         self.next_input_default: str = ""
         self.processing_task: asyncio.Task | None = None
 
@@ -1093,18 +1094,25 @@ class Aries:
         messages = self.conversation.get_messages_for_ollama()
         
         response_text = ""
+        classification = None
         if self.config.ui.stream_output:
+            started = False
             async for chunk in self.ollama.chat_stream(
                 model=self.current_model,
                 messages=messages,
                 tools=self.tool_definitions or None,
             ):
-                if not response_text:
-                    console.print()
-                console.print(chunk, end="")
                 response_text += chunk
+                if not started and chunk.strip() == "":
+                    continue
+
+                if not started:
+                    started = True
+                    console.print()
+
+                console.print(chunk, end="")
             
-            if response_text:
+            if started:
                 console.print("\n")
         else:
             if initial_response is not None:
@@ -1118,8 +1126,9 @@ class Aries:
             if response_text.strip():
                 console.print(f"\n{response_text}\n")
         
-        classification = None
-        if not response_text.strip():
+        stripped = response_text.strip()
+        if not stripped:
+            classification = EMPTY_ASSISTANT_RESPONSE
             display_warning(
                 "(Model returned an empty response — try rephrasing or switching models. Use /last for details.)"
             )
@@ -1129,6 +1138,20 @@ class Aries:
                 "Model response contained no actionable content. "
                 "(Assistant responded with an acknowledgement-only message; provide more detail or request a specific action.)"
             )
+
+        if classification == EMPTY_ASSISTANT_RESPONSE:
+            now = time.time()
+            self.last_model_turn = {
+                "timestamp": now,
+                "model": self.current_model,
+                "raw_response_length": len(response_text),
+                "stripped_response_length": len(stripped),
+                "tool_calls_count": 0,
+                "classification": classification,
+            }
+        elif self.last_model_turn and (self.last_model_turn.get("classification") == EMPTY_ASSISTANT_RESPONSE):
+            # Clear stale empty-response record once a normal response arrives
+            self.last_model_turn = None
 
         self.conversation.add_assistant_message(response_text)
         

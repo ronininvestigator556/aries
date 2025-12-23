@@ -63,13 +63,19 @@ async def test_artifacts_command_open(tmp_path):
 @pytest.mark.asyncio
 async def test_last_command():
     app = MagicMock()
-    app.last_action_details = {"tool": "test", "status": "success"}
-    
+    app.last_action_details = {"tool": "test", "status": "success", "timestamp": 1}
+    app.last_model_turn = {"model": "llama3", "classification": "empty_assistant_response", "timestamp": 2}
+
     cmd = LastCommand()
-    
+
     with patch("aries.commands.last.console") as mock_console:
         await cmd.execute(app, "")
-        mock_console.print.assert_called()
+        headings = [
+            call.args[0]
+            for call in mock_console.print.call_args_list
+            if call.args and isinstance(call.args[0], str) and "Details" in call.args[0]
+        ]
+        assert headings and headings[0].startswith("[bold]Last Model Turn")
 
 
 @pytest.mark.asyncio

@@ -3,11 +3,43 @@
 
 ARIES is a **terminal-native AI workbench** designed for **professional research, investigation, and operator-driven agent execution**.
 
-It is not an autonomous agent platform.
-It is not a background scheduler.
-It is not a policy engine.
+Unlike typical chatbots or autonomous agents, ARIES is built for **humans who need to get work done**. It runs entirely on your local machine, using local AI models (via Ollama) to help you research, code, and analyze data with full transparency and control.
 
-ARIES is a **human-in-the-loop execution environment** where AI assists with planning, analysis, and tool use — while the operator retains visibility, control, and final judgment.
+### What can ARIES do?
+*   **Local-First Chat:** Talk to powerful LLMs without your data leaving your machine.
+*   **Talk to your Data (RAG):** Index folders or PDFs and ask the AI questions about them.
+*   **Web Search:** Search the internet and get summarized answers (via SearXNG).
+*   **Guided Execution:** Use `/run` to let the AI build and execute a step-by-step plan for complex tasks.
+*   **Full Control:** Every tool call and file edit requires your approval. No "black box" behavior.
+
+---
+
+## ⚡ Quick Start
+
+### 1. Prerequisites
+*   **Python 3.11+**
+*   **Ollama:** Install from [ollama.com](https://ollama.com) and pull a model (e.g., `ollama pull llama3`).
+
+### 2. Installation
+```bash
+# Clone the repo and install dependencies
+git clone https://github.com/your-repo/aries.git
+cd aries
+pip install -e .
+```
+
+### 3. Configuration
+Copy the example config and check your settings:
+```bash
+cp config.example.yaml config.yaml
+```
+
+### 4. Run Aries
+```bash
+python -m aries
+```
+
+For a detailed manual on commands and workflows, check out the **[User Guide](./USER_GUIDE.md)**.
 
 ---
 

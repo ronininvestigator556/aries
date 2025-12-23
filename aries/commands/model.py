@@ -21,7 +21,7 @@ class ModelCommand(BaseCommand):
     
     name = "model"
     description = "List available models or switch to a specified model"
-    usage = "[model_name]"
+    usage = "list | <model_name> | use <model_name> | set <model_name> | switch <model_name>"
     
     async def execute(self, app: "Aries", args: str) -> None:
         """Execute model command.
@@ -32,7 +32,11 @@ class ModelCommand(BaseCommand):
         """
         args = args.strip()
         
-        if not args or args == "list":
+        if not args:
+            console.print(f"\n{self.get_help()}\n")
+            return
+
+        if args == "list":
             # List models
             models = await app.ollama.get_model_names()
             if not models:
@@ -66,9 +70,32 @@ class ModelCommand(BaseCommand):
         
         else:
             # Switch model
-            model_name = args
+            parts = args.split()
+            if parts[0] in {"use", "set", "switch"}:
+                model_name = " ".join(parts[1:]).strip()
+                if not model_name:
+                    display_error(f"Usage: /model {parts[0]} <model_name>")
+                    return
+            else:
+                model_name = args
             if await app.ollama.model_exists(model_name):
                 app.current_model = model_name
                 display_success(f"Switched to model: {model_name}")
             else:
                 display_error(f"Model not found: {model_name}\nUse /model list to see available models.")
+
+    def get_help(self) -> str:
+        return (
+            "/model commands:\n"
+            "  /model list\n"
+            "  /model <model_name>\n"
+            "  /model use <model_name>\n"
+            "  /model set <model_name>\n"
+            "  /model switch <model_name>\n\n"
+            "Examples:\n"
+            "  /model list\n"
+            "  /model llama3.2:latest\n"
+            "  /model use llama3.1:latest\n"
+            "  /model set mistral:latest\n\n"
+            "List available models or switch to a specified model."
+        )

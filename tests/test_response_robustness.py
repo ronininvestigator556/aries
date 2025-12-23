@@ -175,3 +175,43 @@ async def test_stream_suppresses_leading_whitespace_then_streams(aries_app, caps
     assert captured.startswith("\nHello")
     assert "Hello world" in captured
     assert not captured.startswith("\n\n")
+
+
+@pytest.mark.asyncio
+async def test_empty_response_adds_rag_hint_for_knowledge_prompt(aries_app):
+    aries_app.config.ui.stream_output = False
+    aries_app.ollama.chat.return_value = {"message": {"content": "", "tool_calls": []}}
+    aries_app._ensure_rag_components = MagicMock(return_value=True)
+    aries_app.indexer = MagicMock()
+    aries_app.indexer.list_indices.return_value = ["docs"]
+
+    with patch("aries.cli.display_warning") as mock_warn:
+        aries_app.conversation.add_user_message("Summarize the book about ARIES.")
+        await aries_app._run_assistant()
+
+    assert any(
+        "Tip: Select an index with `/rag use <id>`" in call.args[0]
+        for call in mock_warn.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_response_skips_rag_hint_for_non_knowledge_prompt(aries_app):
+    aries_app.config.ui.stream_output = False
+    aries_app.ollama.chat.return_value = {"message": {"content": "", "tool_calls": []}}
+    aries_app._ensure_rag_components = MagicMock(return_value=True)
+    aries_app.indexer = MagicMock()
+    aries_app.indexer.list_indices.return_value = ["docs"]
+
+    with patch("aries.cli.display_warning") as mock_warn:
+        aries_app.conversation.add_user_message("Hello there.")
+        await aries_app._run_assistant()
+
+    assert any(
+        "Model returned an empty response" in call.args[0]
+        for call in mock_warn.call_args_list
+    )
+    assert all(
+        "Tip: Select an index with `/rag use <id>`" not in call.args[0]
+        for call in mock_warn.call_args_list
+    )

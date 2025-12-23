@@ -127,6 +127,7 @@ class Aries:
         self.current_model: str = config.ollama.default_model
         self.current_rag: str | None = None
         self.conversation_id = str(uuid.uuid4())
+        self._rag_retrieval_attempted: bool = False
 
         default_profile = self._resolve_default_profile()
         self.conversation = Conversation(
@@ -577,6 +578,42 @@ class Aries:
 
         return True
 
+    def _looks_like_knowledge_request(self, prompt: str) -> bool:
+        if not prompt:
+            return False
+        lowered = prompt.lower()
+        patterns = (
+            r"\bsummarize\b",
+            r"\bsummarise\b",
+            r"\bexplain\b",
+            r"\bwhat does\b",
+            r"\bwhat is\b",
+            r"\bwho is\b",
+            r"\btell me about\b",
+            r"\baccording to\b",
+            r"\bin the book\b",
+            r"\bin the paper\b",
+            r"\bin the document\b",
+            r"\bfrom the (?:docs|documentation|manual)\b",
+        )
+        return any(re.search(pattern, lowered) for pattern in patterns)
+
+    def _rag_indices_exist(self) -> bool:
+        if not self._ensure_rag_components() or not self.indexer:
+            return False
+        try:
+            return bool(self.indexer.list_indices())
+        except Exception:
+            return False
+
+    def _should_add_rag_hint(self) -> bool:
+        if self._rag_retrieval_attempted:
+            return False
+        last_user_msg = self.conversation.get_last_user_message()
+        if not last_user_msg or not self._looks_like_knowledge_request(last_user_msg.content):
+            return False
+        return self._rag_indices_exist()
+
     async def _confirm_tool_execution(self, tool: BaseTool, args: dict[str, Any]) -> bool:
         """Prompt the user to confirm a mutating tool run."""
         prompt_args = self._sanitize_arguments(args)
@@ -848,6 +885,7 @@ class Aries:
         """Run chat loop with optional tool handling."""
         max_tool_iterations = 10
         iteration = 0
+        self._rag_retrieval_attempted = False
 
         # Get the user's query for RAG retrieval
         last_user_msg = self.conversation.get_last_user_message()
@@ -857,6 +895,7 @@ class Aries:
             iteration += 1
             messages = self.conversation.get_messages_for_ollama()
             if self.current_rag and user_query:
+                self._rag_retrieval_attempted = True
                 context_chunks = await self._retrieve_context(user_query)
                 if context_chunks:
                     context_text = "\n\n".join(
@@ -1129,8 +1168,15 @@ class Aries:
         stripped = response_text.strip()
         if not stripped:
             classification = EMPTY_ASSISTANT_RESPONSE
+            rag_hint = ""
+            if self._should_add_rag_hint():
+                rag_hint = (
+                    " Tip: Select an index with `/rag use <id>` and re-ask, or verify "
+                    "retrieval with `/rag last`."
+                )
             display_warning(
-                "(Model returned an empty response — try rephrasing or switching models. Use /last for details.)"
+                "(Model returned an empty response — try rephrasing or switching models. "
+                f"Use /last for details.){rag_hint}"
             )
         elif self._is_non_actionable_response(response_text, tool_calls_present=False):
             # Guard against acknowledgement-only replies that provide no actionable detail

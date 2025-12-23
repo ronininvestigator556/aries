@@ -26,7 +26,7 @@ class HelpCommand(BaseCommand):
             app: Aries application instance.
             args: Optional command name to get help for.
         """
-        args = args.strip()
+        args = args.strip().lstrip("/")
         
         if not args:
             # Show all commands

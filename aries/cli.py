@@ -630,6 +630,11 @@ class Aries:
             user_input: Raw user input string.
         """
         user_input = user_input.strip()
+        
+        # Heuristic: "help /cmd" -> "/help cmd"
+        if user_input.lower().startswith("help /"):
+            user_input = "/" + user_input
+            
         self.last_action_status = "Running"
         
         # Check if it's a command
@@ -843,7 +848,7 @@ class Aries:
             else:
                 display_error(f"{summary} ({result.error})")
             
-            if output:
+            if output and result.success:
                 display_output = output[:max_display_chars]
                 if len(output) > max_display_chars:
                     display_output += f"\n... (truncated, {len(output)} total chars)"

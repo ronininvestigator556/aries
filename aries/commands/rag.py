@@ -18,7 +18,7 @@ class RAGCommand(BaseCommand):
 
     name = "rag"
     description = "List RAG indices, index a directory, inspect retrievals"
-    usage = "[list|off|<index_name>|index add <path> [name]|use <name>|drop <name>|show <handle>|last]"
+    usage = "[list|off|<index_name>|add <path> [name]|index add <path> [name]|use <name>|drop <name>|show <handle>|last]"
 
     async def execute(self, app: "Aries", args: str) -> None:
         args = args.strip()
@@ -41,11 +41,17 @@ class RAGCommand(BaseCommand):
             display_success("RAG disabled.")
             return
 
-        if args.startswith("index "):
-            parts = args.split()
-            if len(parts) < 3 or parts[1] != "add":
-                display_error("Usage: /rag index add <path> [name]")
+        # Support both "/rag add <path>" and "/rag index add <path>"
+        if args.startswith("add ") or args.startswith("index add "):
+            if args.startswith("add "):
+                parts = ["index", "add"] + args.split()[1:]
+            else:
+                parts = args.split()
+            
+            if len(parts) < 3:
+                display_error("Usage: /rag add <path> [name] or /rag index add <path> [name]")
                 return
+            
             dir_path = Path(parts[2]).expanduser()
             name = parts[3] if len(parts) > 3 else dir_path.name
 

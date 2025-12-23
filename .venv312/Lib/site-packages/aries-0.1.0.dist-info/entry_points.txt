@@ -1,0 +1,2 @@
+[console_scripts]
+aries = aries.__main__:main

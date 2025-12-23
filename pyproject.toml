@@ -74,7 +74,7 @@ all = [
 ]
 
 [project.scripts]
-aries = "aries.__main__:main"
+aries = "aries.cli:main"
 
 [build-system]
 requires = ["setuptools>=65", "wheel"]

@@ -35,7 +35,7 @@ This guide is written to be practical and “operator-first”: you get visibili
 ## Quickstart
 
 ### Prerequisites
-- **Python 3.11+** (recommended: 3.11–3.13 for easiest wheels on Windows)
+- **Python 3.11–3.13** (best wheel coverage on Windows; 3.14 is not supported yet)
 - **Ollama** installed and running
   - Pull a model: `ollama pull llama3` (or another model you prefer)
 
@@ -60,6 +60,17 @@ pip install -e .
 ```
 
 ### Start Aries
+Preferred (all platforms):
+```bash
+aries
+```
+
+Fallback launchers (helpful if entrypoints are not on PATH):
+- Windows PowerShell: `.\aries.ps1`
+- macOS/Linux: `./aries.sh`
+
+These scripts prefer the project virtual environment when present and avoid platform-specific command differences.
+
 ```bash
 python -m aries
 ```
@@ -112,6 +123,8 @@ Aries supports optional “extras” so you can keep the base install lightweigh
 | Development tooling + tests | `pip install -e ".[dev]"` |
 | RAG capability (document indexing & retrieval) | `pip install -e ".[rag]"` |
 | Everything (recommended for power users) | `pip install -e ".[dev,rag]"` |
+
+If the `[rag]` extra is not installed, `/rag` commands print a friendly reminder instead of failing so you can opt in later.
 
 ### Windows Notes: Avoiding Painful Builds
 Some Python package sets may try to compile native dependencies on Windows if wheels aren’t available for your Python version.

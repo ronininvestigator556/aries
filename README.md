@@ -17,7 +17,7 @@ Unlike typical chatbots or autonomous agents, ARIES is built for **humans who ne
 ## ⚡ Quick Start
 
 ### 1. Prerequisites
--   **Python 3.11 or 3.12 recommended.** Windows users should avoid Python 3.14 for now because binary wheels for optional libraries (e.g., `chromadb`, `numpy`, `unstructured`) may be missing and will trigger slow source builds.
+-   **Python 3.11–3.13 required.** Windows users should avoid Python 3.14 for now because binary wheels for optional libraries (e.g., `chromadb`, `numpy`, `unstructured`) may be missing and will trigger slow source builds.
 -   **Ollama:** Install from [ollama.com](https://ollama.com) and pull a model (e.g., `ollama pull llama3`).
 -   **PowerShell users:** Commands below avoid `||` and are safe to paste directly.
 
@@ -57,6 +57,36 @@ python -m pip install -e ".[rag]"
 **Full stack (dev + RAG)**
 ```powershell
 python -m pip install -e ".[all]"
+```
+
+### Starting ARIES
+- Preferred (all platforms, after `pip install -e .`):  
+  ```bash
+  aries
+  ```
+- Windows fallback:  
+  ```powershell
+  .\\aries.ps1
+  ```
+- macOS/Linux fallback:  
+  ```bash
+  ./aries.sh
+  ```
+
+### Python Version
+ARIES supports Python 3.11–3.13. Newer versions (e.g., 3.14) may require source builds for dependencies like `numpy` or `chromadb` and are not supported yet. The CLI fails fast with a clear message if an unsupported interpreter is used.
+
+### Minimal Setup (venv + editable install)
+```powershell
+python -m venv .venv
+# Windows
+.\\.venv\\Scripts\\Activate.ps1
+# macOS/Linux
+source .venv/bin/activate
+python -m pip install -U pip
+pip install -e .
+pip install -e ".[dev]"
+pip install -e ".[rag]"
 ```
 
 #### Network/Proxy installs

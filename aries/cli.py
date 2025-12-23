@@ -8,6 +8,42 @@ This module handles:
 - Main application loop
 """
 
+from __future__ import annotations
+
+import sys
+from typing import TYPE_CHECKING, Any
+
+MIN_PYTHON = (3, 11)
+MAX_PYTHON = (3, 14)
+
+
+def _ensure_supported_python(version_info: Any | None = None) -> None:
+    """Ensure the interpreter is within the supported range.
+
+    Args:
+        version_info: Optional version tuple-like object; defaults to ``sys.version_info``.
+
+    Raises:
+        RuntimeError: When the interpreter is outside the supported range.
+    """
+
+    info = version_info or sys.version_info
+    major = getattr(info, "major", None)
+    minor = getattr(info, "minor", None)
+    micro = getattr(info, "micro", 0)
+    current = (int(major), int(minor), int(micro))
+
+    if current < MIN_PYTHON or current >= MAX_PYTHON:
+        detected = ".".join(str(part) for part in current[:3])
+        raise RuntimeError(
+            "Unsupported Python version: "
+            f"{detected}. ARIES requires Python 3.11-3.13. "
+            "Install Python 3.11, 3.12, or 3.13 and/or use the project virtual environment."
+        )
+
+
+_ensure_supported_python()
+
 import asyncio
 import hashlib
 import logging
@@ -15,7 +51,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import Iterable
 
 from rich.console import Console
 
@@ -1090,6 +1126,7 @@ class Aries:
         elif self._is_non_actionable_response(response_text, tool_calls_present=False):
             # Guard against acknowledgement-only replies that provide no actionable detail
             display_warning(
+                "Model response contained no actionable content. "
                 "(Assistant responded with an acknowledgement-only message; provide more detail or request a specific action.)"
             )
 
@@ -1202,3 +1239,10 @@ async def run_cli() -> int:
         display_error(str(exc))
         return 1
     return await app.start()
+
+
+def main() -> None:
+    """Console script entrypoint for Aries."""
+    exit_code = asyncio.run(run_cli())
+    if exit_code:
+        raise SystemExit(exit_code)

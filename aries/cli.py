@@ -15,7 +15,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from rich.console import Console
 
@@ -32,13 +32,15 @@ from aries.exceptions import FileToolError
 from aries.core.tool_validation import validate_tools
 from aries.core.tokenizer import TokenEstimator
 from aries.exceptions import AriesError, ConfigError
-from aries.rag.indexer import Indexer
-from aries.rag.retriever import Retriever
 from aries.providers import CoreProvider, MCPProvider
 from aries.providers.mcp import MCPServerStatus, register_status
 from aries.tools.base import BaseTool, ToolResult
 from aries.ui.display import display_error, display_info, display_warning, display_welcome
 from aries.ui.input import get_user_input
+
+if TYPE_CHECKING:
+    from aries.rag.indexer import Indexer
+    from aries.rag.retriever import Retriever
 
 
 console = Console()
@@ -76,8 +78,9 @@ class Aries:
         self.tool_policy = ToolPolicy(config.tools)
         self.workspace = WorkspaceManager(config.workspace, config.tools)
         self.ollama = OllamaClient(config.ollama)
-        self.indexer = Indexer(config.rag, self.ollama, token_estimator=self._token_estimator)
-        self.retriever = Retriever(config.rag, self.ollama)
+        self.indexer: "Indexer | None" = None
+        self.retriever: "Retriever | None" = None
+        self._rag_import_error: Exception | None = None
         self.running = True
         self.current_model: str = config.ollama.default_model
         self.current_rag: str | None = None
@@ -138,6 +141,36 @@ class Aries:
             return
         display_warning(message)
         self._warnings_shown.add(key)
+
+    def _ensure_rag_components(self) -> bool:
+        """Initialize optional RAG components without forcing heavy dependencies."""
+        if self.indexer and self.retriever:
+            return True
+        if self._rag_import_error:
+            return False
+        try:
+            from aries.rag.indexer import Indexer
+            from aries.rag.retriever import Retriever
+        except Exception as exc:  # pragma: no cover - environment-specific imports
+            self._rag_import_error = exc
+            self.indexer = None
+            self.retriever = None
+            return False
+
+        self.indexer = Indexer(
+            self.config.rag, self.ollama, token_estimator=self._token_estimator
+        )
+        self.retriever = Retriever(self.config.rag, self.ollama)
+        if self.workspace.current:
+            self._apply_workspace_index_path()
+        return True
+
+    def rag_dependency_message(self) -> str:
+        """Return a user-friendly message for missing RAG extras."""
+        base = "RAG features require optional dependencies. Install with `pip install -e \".[rag]\"`."
+        if self._rag_import_error:
+            base = f"{base} ({self._rag_import_error})"
+        return base
 
     def _register_mcp_providers(self) -> None:
         """Register MCP providers when enabled."""
@@ -803,6 +836,10 @@ class Aries:
 
     async def _retrieve_context(self, query: str):
         """Fetch RAG context if an index is active."""
+        if not self._ensure_rag_components() or not self.retriever:
+            self._warn_once("rag:missing", self.rag_dependency_message())
+            return []
+
         try:
             chunks = await self.retriever.retrieve(query)
             handles = self.retriever.last_handles
@@ -1046,7 +1083,7 @@ class Aries:
             registry.register_file(path, description=description, source=source, extra=extra)
 
     def _apply_workspace_index_path(self) -> None:
-        if self.workspace.current:
+        if self.workspace.current and self.indexer and self.retriever:
             index_dir = self.workspace.current.index_dir
             self.indexer.config.indices_dir = index_dir
             self.retriever.config.indices_dir = index_dir

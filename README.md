@@ -28,6 +28,12 @@ cd aries
 pip install -e .
 ```
 
+**Optional extras**
+
+- Runtime with RAG features: `pip install -e ".[rag]"`
+- Developer tools only: `pip install -e ".[dev]"`
+- Everything (dev + RAG): `pip install -e ".[dev,rag]"`
+
 ### 3. Configuration
 Copy the example config and check your settings:
 ```bash

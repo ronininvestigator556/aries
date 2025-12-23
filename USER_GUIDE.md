@@ -1,125 +1,425 @@
-# Aries User Guide: Get Things Done
+# Aries User Guide
+*Get Things Done: local-first research, investigation, coding, and automation*
 
-Aries is a command-line AI assistant that runs entirely on your local machine. It connects to local LLMs (like Ollama) to help you code, research, and analyze documents without sending your data to the cloud.
+> Aries is a command-line AI assistant that runs locally and connects to local models (e.g., Ollama). It can:  
+> - Chat and reason with your context  
+> - Use tools (filesystem, shell, web search)  
+> - Run multi-step agent plans (`/run`) with risk-tier approvals  
+> - Add **RAG** (chat with your documents) as an optional capability  
+> - Integrate **MCP Playwright** (browser automation) and **MCP Desktop Commander** (desktop control) when enabled
 
-This guide skips the theory and focuses on how to use it right now.
+This guide is written to be practical and “operator-first”: you get visibility, you stay in control, and nothing silently mutates state without explicit approval.
 
 ---
 
-## 1. Quick Setup
+## Table of Contents
+1. [Quickstart](#quickstart)  
+2. [Core Concepts](#core-concepts)  
+3. [Installation & Dependencies](#installation--dependencies)  
+4. [Configuration](#configuration)  
+5. [Everyday Usage](#everyday-usage)  
+6. [Workspaces](#workspaces)  
+7. [Profiles](#profiles)  
+8. [Agent Runs (`/run`)](#agent-runs-run)  
+9. [RAG: Chat with Your Documents](#rag-chat-with-your-documents)  
+10. [Direct Tooling](#direct-tooling)  
+11. [Playwright Integration (MCP)](#playwright-integration-mcp)  
+12. [Desktop Commander Integration (MCP)](#desktop-commander-integration-mcp)  
+13. [Artifacts](#artifacts)  
+14. [Troubleshooting & Diagnostics](#troubleshooting--diagnostics)  
+15. [Security, Safety, and Governance](#security-safety-and-governance)  
+16. [Appendix: Example Workflows](#appendix-example-workflows)
+
+---
+
+## Quickstart
 
 ### Prerequisites
-1.  **Install Python 3.11+**
-2.  **Install Ollama**: [https://ollama.com](https://ollama.com)
-    *   Pull a model: `ollama pull llama3` (or `mistral`, `phi3`, etc.)
+- **Python 3.11+** (recommended: 3.11–3.13 for easiest wheels on Windows)
+- **Ollama** installed and running
+  - Pull a model: `ollama pull llama3` (or another model you prefer)
 
-### Installation
-Run this from the `aries` directory:
+### Install (Base)
+From the repo root:
 
+#### macOS/Linux
 ```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
 pip install -e .
 ```
 
-### Configuration
-1.  Copy the example config:
-    ```bash
-    cp config.example.yaml config.yaml
-    ```
-2.  Open `config.yaml` and ensure `ollama_base_url` is correct (usually `http://localhost:11434`).
+#### Windows PowerShell
+```powershell
+python -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+pip install -e .
+```
 
 ### Start Aries
 ```bash
 python -m aries
 ```
 
+### Verify
+Inside Aries:
+```text
+/help
+/model list
+/policy
+```
+
 ---
 
-## 2. Basic Chatting
+## Core Concepts
 
-Once Aries is running, just type your message and hit Enter.
+### What Aries Is (and Is Not)
+- **Is:** a local CLI agent with explicit tool invocation and operator approval for risky actions.
+- **Is not:** an autonomous background scheduler or “hands-off” automation system.
 
-*   **Chat:** `How do I reverse a list in Python?`
-*   **Multiline:** Press `Alt+Enter` (or `Esc` then `Enter`) to add a new line without sending.
-*   **Clear History:** Type `/clear` to wipe the current conversation context.
-*   **Quit:** Type `/exit` or `/quit`.
+### Operator-First Execution
+Aries prioritizes:
+- **Visibility**: clear status lines, reports, and error messages
+- **Control**: approvals, manual stepping, skip/retry, and run inspection
+- **Recoverability**: runs persist and can be resumed/inspected
+
+### Risk Tiers (Mental Model)
+Aries uses tiers to help you decide what to approve. A simplified mapping:
+
+| Tier | Typical meaning | Examples |
+|---:|---|---|
+| 0 | Read-only / analysis | reading files, local parsing, retrieval |
+| 1 | Workspace-scoped writes | writing artifacts in workspace |
+| 2 | Shell / desktop control | shell commands, desktop actions |
+| 3 | Network/browser automation | Playwright/browser automation, networked tools |
+
+In practice, Aries may compute an **effective tier** as the maximum of the plan step’s tier and the tool’s tier.
+
+---
+
+## Installation & Dependencies
+
+Aries supports optional “extras” so you can keep the base install lightweight.
+
+### Recommended Install Targets
+
+| Goal | Install |
+|---|---|
+| Just run Aries (CLI + core tools) | `pip install -e .` |
+| Development tooling + tests | `pip install -e ".[dev]"` |
+| RAG capability (document indexing & retrieval) | `pip install -e ".[rag]"` |
+| Everything (recommended for power users) | `pip install -e ".[dev,rag]"` |
+
+### Windows Notes: Avoiding Painful Builds
+Some Python package sets may try to compile native dependencies on Windows if wheels aren’t available for your Python version.
+- If you hit compiler errors (e.g., missing Visual Studio Build Tools), consider:
+  - Using **Python 3.11–3.13** instead of bleeding-edge versions
+  - Installing the “all wheels friendly” combo first: `pip install -U pip setuptools wheel`
+  - Installing in two phases: base first, then extras
+
+### Proxy/Corporate Network Notes
+If your environment blocks PyPI traffic or uses a proxy:
+- Set `PIP_INDEX_URL` / `PIP_EXTRA_INDEX_URL` (or configure `pip.ini`)
+- If TLS inspection is present, you may need corporate root cert configuration
+
+---
+
+## Configuration
+
+Aries uses YAML configuration (typically `config.yaml`).
+
+### Minimal Example
+```yaml
+ollama_base_url: "http://localhost:11434"
+default_model: "llama3"
+confirmation_required: true
+allow_shell: true
+allow_network: true
+allowed_roots:
+  - "C:\\Users\\yourname\\Dev\\aries"
+```
+
+### Key Settings
+- `ollama_base_url`: Ollama server address
+- `default_model`: startup model
+- `confirmation_required`: whether approvals are enforced for risky tool calls
+- `allow_shell`: enable shell tool
+- `allow_network`: enable web search / networked tools (and browser automation if configured)
+- `allowed_roots`: filesystem roots Aries is permitted to access
+
+### Verify Policy
+Inside Aries:
+```text
+/policy
+```
+
+---
+
+## Everyday Usage
+
+### Chat
+Just type and press Enter:
+```text
+Summarize the key risks in this plan and suggest mitigations.
+```
+
+### Clear Context
+```text
+/clear
+```
+
+### Exit
+```text
+/exit
+```
 
 ### Switch Models
-Want to use a different LLM?
-```bash
-/model list           # See what models you have
-/model set llama3     # Switch to llama3
+```text
+/model list
+/model set llama3
 ```
 
 ---
 
-## 3. Chat with Your Documents (RAG)
+## Workspaces
 
-Aries can read your local files (PDF, Markdown, Text) and answer questions about them.
+Workspaces let you separate projects and persist:
+- chat history
+- run state
+- artifacts
+- RAG indices (when enabled)
 
-**1. Index a folder or file:**
-Tell Aries to read a directory. It will scan, chunk, and embed the files into a local database.
-```bash
-/rag index ./my_project_docs
-```
-
-**2. Ask questions:**
-Once indexed, the AI automatically knows about the content.
-*   `Summarize the project roadmap I just indexed.`
-*   `What does the CONTRIBUTING.md say about pull requests?`
-
-**3. Search directly:**
-If you just want to find relevant snippets without an AI answer:
-```bash
-/rag search "deployment error codes"
+### Common Commands
+```text
+/workspace list
+/workspace new client_x
+/workspace open client_x
 ```
 
 ---
 
-## 4. Web Search
+## Profiles
 
-Aries can search the web for real-time info (requires a configured search provider in `config.yaml`, usually SearXNG).
+Profiles are “system prompt personas” + defaults that shape behavior.
+Use profiles to set tone and domain constraints (e.g., investigator, coder).
 
-```bash
-/search "latest python 3.12 features"
+```text
+/profile list
+/profile use investigator
 ```
-The AI will fetch the results and summarize the answer for you.
 
 ---
 
-## 5. Workspaces (Projects)
+## Agent Runs (`/run`)
 
-Keep your work separate. Workspaces store your chat history, indexed documents (RAG), and configuration for a specific project.
+Agent runs are structured multi-step executions:
+1. Plan generation
+2. Stepwise execution
+3. Tool usage with tier enforcement + approvals
+4. Persisted status and reporting
 
-```bash
-/workspace list            # Show all workspaces
-/workspace new project_x   # Create a new one
-/workspace open project_x  # Switch to it
+### Start a Run
+```text
+/run "Create a structured intake form template and save it to the workspace."
 ```
-*Tip: When you switch workspaces, your chat history and RAG index switch too.*
+
+### Monitor
+```text
+/run status
+/run steps
+```
+
+### Operator Controls
+```text
+/run pause
+/run resume
+/run skip 3
+/run retry 3
+/run stop
+```
+
+### Manual Stepping vs Auto
+When enabled:
+```text
+/run next       # execute a single step then pause
+/run continue   # resume automatic sequential execution
+```
+
+### Inspect Any Run
+```text
+/run inspect
+/run inspect <run_id>
+```
 
 ---
 
-## 6. Advanced: Agent Runs
+## RAG: Chat with Your Documents
 
-For complex tasks that require multiple steps (planning -> execution), use the `/run` command.
+RAG (Retrieval-Augmented Generation) allows Aries to index local files and retrieve relevant passages during answers.
 
+### 1) Install RAG Dependencies
 ```bash
-/run "Refactor the authentication module to use JWTs"
+pip install -e ".[rag]"
 ```
-Aries will:
-1.  Propose a plan.
-2.  Ask for your approval.
-3.  Execute tools (edit files, run commands) step-by-step.
+If you want dev tooling plus RAG:
+```bash
+pip install -e ".[dev,rag]"
+```
+
+### 2) Confirm RAG is Available
+Inside Aries:
+```text
+/help /rag
+/rag list
+```
+If you see a message indicating optional dependencies are missing, install the `[rag]` extra.
+
+### 3) Index a Folder
+```text
+/rag add C:\path\to\docs
+```
+Depending on your build, you may also see:
+```text
+/rag index add C:\path\to\docs
+```
+
+### 4) Select an Index (If Needed)
+```text
+/rag use <index_name>
+```
+
+### 5) Ask Questions
+```text
+Summarize the surveillance tradecraft principles in the indexed folder.
+List any recommended checklists and their intended use.
+```
+
+### RAG Pipeline (Diagram)
+```mermaid
+flowchart LR
+  A[Files & Folders] --> B[Loaders: PDF/EPUB/TXT/MD]
+  B --> C[Chunking]
+  C --> D[Embedding]
+  D --> E[(Vector Store)]
+  Q[User Query] --> F[Embed Query]
+  F --> E
+  E --> G[Top-K Passages]
+  G --> H[LLM Answer w/ citations]
+```
 
 ---
 
-## 7. Useful Commands Cheat Sheet
+## Direct Tooling
+Use `/last` for debugging tool calls and model payloads:
+```text
+/last
+```
 
-| Command | Description |
-| :--- | :--- |
-| `/help` | Show all available commands |
-| `/clear` | Clear current chat history |
-| `/last` | Show the last message again (useful for copy-pasting) |
-| `/profile list` | See available AI personas (e.g., Coder, Writer) |
-| `/profile use <name>` | Switch persona |
-| `/rag status` | See how many documents are currently indexed |
+---
+
+## Playwright Integration (MCP)
+
+Playwright via MCP enables browser automation for web research and navigation.
+
+### Requirements
+- MCP Playwright provider configured
+- `allow_network: true`
+- Operator approvals for Tier 3 actions
+
+### Browser Automation (Diagram)
+```mermaid
+sequenceDiagram
+  participant O as Operator
+  participant A as Aries
+  participant P as MCP Playwright
+  O->>A: /run "Research topic"
+  A->>O: Plan + Tier 3 approval request
+  O->>A: Approve
+  A->>P: navigate/search/capture
+  P-->>A: content + screenshots + timings
+  A-->>O: report + artifacts
+```
+
+---
+
+## Desktop Commander Integration (MCP)
+
+Desktop Commander enables controlled desktop actions (Tier 2 in most setups).
+
+### Requirements
+- MCP Desktop Commander provider configured
+- `allow_shell` often recommended
+- Operator approvals (Tier 2)
+
+### Desktop Control (Diagram)
+```mermaid
+flowchart TB
+  O[Operator] -->|Approves| A[Aries Run Engine]
+  A -->|Tier 2 tool call| D[MCP Desktop Commander]
+  D -->|UI actions| OS[Operating System]
+  OS -->|files/outputs| A
+  A -->|artifacts| W[(Workspace)]
+```
+
+---
+
+## Artifacts
+```text
+/artifacts
+/artifacts run <run_id>
+/artifact open <id>
+```
+
+---
+
+## Troubleshooting & Diagnostics
+
+### “Nothing happened” / Blank output
+- Use `/last`
+- Switch models: `/model set llama3`
+- Rephrase prompts to be more directive
+
+### Missing dependencies
+Install the right extra:
+- Base: `pip install -e .`
+- Dev: `pip install -e ".[dev]"`
+- RAG: `pip install -e ".[rag]"`
+
+### PowerShell gotcha: `||`
+PowerShell doesn’t support `cmd.exe`-style `||`.
+
+Use:
+```powershell
+pip install -e ".[dev]"
+# or:
+pip install -e .
+```
+
+### Tool access denied (roots)
+Update `allowed_roots` in `config.yaml`, then verify with `/policy`.
+
+---
+
+## Security, Safety, and Governance
+- Keep `confirmation_required: true`
+- Minimize `allowed_roots`
+- Use separate workspaces per client/project
+- Treat RAG corpora as sensitive
+
+---
+
+## Appendix: Example Workflows
+
+### PI-style brief (local + web)
+1. `/workspace new case_foo`
+2. `/rag add .\evidence` (optional)
+3. `/search "subject name + city"`
+4. `/run "Produce an OSINT brief with timeline and sources."`
+
+### Software project deep-dive (RAG)
+1. `/workspace new project_bar`
+2. `/rag add .\repo`
+3. Ask: `Explain the run persistence model.`

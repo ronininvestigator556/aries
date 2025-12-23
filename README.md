@@ -106,6 +106,37 @@ MCP connectivity is tracked per server with a simple lifecycle model:
 
 Run `/policy show` to view the MCP Servers section (server id, transport, state, tool count, last connect, and last error summary). `/policy explain` for MCP tools also reports the server state and the latest error when not connected. If a server reports `error`, verify the endpoint/command and credentials, then retry by restarting Aries (or fix the server) — no background retries are performed. Optional startup retries can be enabled via `providers.mcp.retry`.
 
+### Playwright Integration (Beta)
+
+Aries includes a bundled Playwright MCP server for web automation. To enable it:
+
+1.  **Install Playwright:**
+    ```bash
+    pip install playwright
+    playwright install
+    ```
+
+2.  **Configure `config.yaml`:**
+    ```yaml
+    providers:
+      mcp:
+        enabled: true
+        servers:
+          - id: "playwright"
+            # Use the bundled server script
+            command: ["python", "-m", "aries.providers.playwright_server.server"]
+            # To run in stub mode (no browser needed), set this env var:
+            # env:
+            #   ARIES_PLAYWRIGHT_STUB: "1"
+    ```
+
+3.  **Available Tools:**
+    - `mcp:playwright:browser_new_context`
+    - `mcp:playwright:page_goto`
+    - `mcp:playwright:page_screenshot` (emits artifacts)
+    - `mcp:playwright:page_content`
+    - `mcp:playwright:browser_close_context`
+
 ## Phase 2 golden path
 
 Follow this minimal flow to exercise the hardened features:

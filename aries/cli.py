@@ -122,7 +122,8 @@ class Aries:
             if self.current_run.status in (
                 RunStatus.RUNNING, RunStatus.PLANNING, RunStatus.PAUSED, RunStatus.AWAITING_APPROVAL
             ):
-                run_status = f" | <b>Run:</b> {self.current_run.status.value}"
+                mode = "manual" if getattr(self.current_run, "manual_stepping", False) else "auto"
+                run_status = f" | <b>Run:</b> {self.current_run.status.value} ({mode})"
                 if self.current_run.current_step_index < len(self.current_run.plan):
                     run_status += f" (Step {self.current_run.current_step_index + 1}/{len(self.current_run.plan)})"
         
@@ -303,6 +304,67 @@ class Aries:
         except FileNotFoundError:
             self.workspace.new(workspace_cfg.default)
         self._apply_workspace_index_path()
+
+    async def _check_incomplete_runs(self) -> None:
+        """C.6 - Check for incomplete runs and offer recovery options."""
+        if not self.workspace.current:
+            return
+
+        # Initialize run manager
+        if not hasattr(self, "run_manager"):
+            self.run_manager = RunManager(self.workspace.current.root)
+
+        from aries.core.agent_run import RunStatus
+        incomplete_runs = []
+        for run_id in self.run_manager.list_runs():
+            run = self.run_manager.load_run(run_id)
+            if not run:
+                continue
+
+            # Check if incomplete (not completed, failed, stopped, cancelled, or archived)
+            if run.status in (
+                RunStatus.RUNNING, RunStatus.PLANNING, RunStatus.PAUSED, RunStatus.AWAITING_APPROVAL
+            ):
+                # Skip archived runs
+                if hasattr(run, "archived") and run.archived:
+                    continue
+                incomplete_runs.append(run)
+
+        if incomplete_runs:
+            from aries.ui.display import display_warning
+            from aries.ui.input import get_user_input
+
+            console.print(f"\n[yellow]Found {len(incomplete_runs)} incomplete run(s):[/yellow]")
+            for run in incomplete_runs:
+                duration = run.duration_seconds()
+                duration_str = f"{duration:.1f}s" if duration else "N/A"
+                console.print(f"  - {run.run_id}: {run.goal} (Status: {run.status.value}, Duration: {duration_str})")
+
+            console.print("\nOptions:")
+            console.print("  [i]inspect[/i] <run_id> - Inspect a run")
+            console.print("  [i]resume[/i] <run_id> - Resume a paused run")
+            console.print("  [i]archive[/i] <run_id> - Archive a run")
+            console.print("  [i]skip[/i] - Continue without action")
+
+            response = await get_user_input("\nAction (or 'skip'): ")
+            response = response.strip().lower()
+
+            if response.startswith("inspect "):
+                run_id = response.split(maxsplit=1)[1]
+                from aries.commands.run import RunCommand
+                cmd = RunCommand()
+                await cmd._handle_inspect(self, run_id)
+            elif response.startswith("resume "):
+                run_id = response.split(maxsplit=1)[1]
+                from aries.commands.run import RunCommand
+                cmd = RunCommand()
+                await cmd._handle_resume_by_id(self, run_id)
+            elif response.startswith("archive "):
+                run_id = response.split(maxsplit=1)[1]
+                from aries.commands.run import RunCommand
+                cmd = RunCommand()
+                await cmd._handle_archive(self, run_id)
+            # else skip - continue normally
 
     def _resolve_tool_reference(self, name: str) -> tuple[Any, Any, str | None]:
         """Resolve a tool name to a tool object and tool id with error messaging."""
@@ -502,6 +564,9 @@ class Aries:
                 "Make sure Ollama is running: ollama serve"
             )
             return 1
+
+        # C.6 - Run Recovery UX: Check for incomplete runs on startup
+        await self._check_incomplete_runs()
         
         # Main loop
         while self.running:

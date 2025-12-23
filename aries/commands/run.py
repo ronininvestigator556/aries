@@ -12,6 +12,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 from aries.commands.base import BaseCommand
 from aries.core.agent_run import AgentRun, ApprovalDecision, PlanStep, RunStatus, StepResult, StepStatus
@@ -34,14 +36,14 @@ class RunCommand(BaseCommand):
 
     name = "run"
     description = "Start and manage agent runs"
-    usage = "<goal> | pause | resume | stop | status | steps | skip <n> | retry <n> | edit"
+    usage = "<goal> | pause | resume | stop | status | steps | skip <n> | retry <n> | edit | inspect [run_id] | next | continue | archive [run_id]"
 
     async def execute(self, app: "Aries", args: str) -> None:
         """Execute run command."""
         args = args.strip()
 
         if not args:
-            display_error("Usage: /run <goal> | pause | resume | stop | status | steps | skip <n> | retry <n> | edit")
+            display_error("Usage: /run <goal> | pause | resume | stop | status | steps | skip <n> | retry <n> | edit | inspect [run_id] | next | continue | archive [run_id]")
             return
 
         # Initialize run manager if not already done
@@ -58,6 +60,9 @@ class RunCommand(BaseCommand):
             await self._handle_pause(app)
         elif args == "resume":
             await self._handle_resume(app)
+        elif args.startswith("resume "):
+            run_id = args.split(maxsplit=1)[1]
+            await self._handle_resume_by_id(app, run_id)
         elif args == "stop":
             await self._handle_stop(app)
         elif args == "status":
@@ -78,6 +83,21 @@ class RunCommand(BaseCommand):
                 display_error(f"Invalid step number: {step_num}")
         elif args == "edit":
             await self._handle_edit(app)
+        elif args == "inspect" or args.startswith("inspect "):
+            run_id = args.split(maxsplit=1)[1] if " " in args else None
+            await self._handle_inspect(app, run_id)
+        elif args == "next":
+            await self._handle_next(app)
+        elif args == "continue":
+            await self._handle_continue(app)
+        elif args.startswith("archive "):
+            run_id = args.split(maxsplit=1)[1]
+            await self._handle_archive(app, run_id)
+        elif args == "archive":
+            if app.current_run:
+                await self._handle_archive(app, app.current_run.run_id)
+            else:
+                display_error("No active run to archive.")
         else:
             # Start new run with goal
             await self._handle_start(app, args)
@@ -102,6 +122,8 @@ class RunCommand(BaseCommand):
             profile=app.current_prompt or "default",
             workspace_name=app.workspace.current.name,
             cancellation_token=CancellationToken(),
+            manual_stepping=False,
+            archived=False,
         )
         app.current_run.started_at = datetime.now()
 
@@ -204,18 +226,26 @@ Example format:
                     break
 
                 if run.status == RunStatus.PAUSED:
-                    display_info("Run is paused. Use /run resume to continue.")
+                    # Check if manual stepping mode
+                    if hasattr(run, "manual_stepping") and run.manual_stepping:
+                        display_info("Run is paused in manual stepping mode. Use /run next to execute next step or /run continue for automatic execution.")
+                    else:
+                        display_info("Run is paused. Use /run resume to continue.")
                     break
 
                 step = run.plan[run.current_step_index]
 
-                # Check approval for tier 2+
+                # Check approval for tier 2+ (step-level check)
                 if step.risk_tier >= 2:
                     if not run.is_approved_for_tier(step.risk_tier):
                         run.status = RunStatus.AWAITING_APPROVAL
                         app.run_manager.save_run(run)
 
-                        approved, scope = await self._request_approval(app, step.risk_tier)
+                        approved, scope = await self._request_approval(
+                            app, step.risk_tier,
+                            step_tier=step.risk_tier,
+                            escalation_reason=f"Step requires Tier {step.risk_tier} actions",
+                        )
                         if not approved:
                             run.status = RunStatus.STOPPED
                             break
@@ -334,7 +364,27 @@ Use the available tools to accomplish this step. Call the appropriate tools to p
                             run.status = RunStatus.AWAITING_APPROVAL
                             app.run_manager.save_run(run)
 
-                            approved, scope = await self._request_approval(app, effective)
+                            # C.2 - Tool Intent Disclosure
+                            tool_provider = getattr(tool, "provider_id", "")
+                            if tool_provider.startswith("mcp_"):
+                                tool_provider = f"MCP {tool_provider.replace('mcp_', '').replace('_', ' ').title()}"
+                            elif tool_provider:
+                                tool_provider = tool_provider.replace("_", " ").title()
+                            
+                            escalation_reason = None
+                            if tool_tier > step.risk_tier:
+                                escalation_reason = f"Tool tier ({tool_tier}) exceeds step tier ({step.risk_tier})"
+                            elif step.risk_tier >= 2:
+                                escalation_reason = "Step requires high-tier actions"
+
+                            approved, scope = await self._request_approval(
+                                app, effective,
+                                step_tier=step.risk_tier,
+                                tool_tier=tool_tier,
+                                tool_name=str(tool_id) if tool_id else tool.name,
+                                tool_provider=tool_provider,
+                                escalation_reason=escalation_reason,
+                            )
                             if not approved:
                                 result.status = StepStatus.FAILED
                                 result.error = f"Tier {effective} actions not approved"
@@ -356,12 +406,24 @@ Use the available tools to accomplish this step. Call the appropriate tools to p
                             app.run_manager.save_run(run)
 
                     # Execute tool
+                    import time
+                    tool_start = time.time()
                     tool_result, audit = await app._run_tool(tool, call, tool_id)
+                    tool_latency_ms = int((time.time() - tool_start) * 1000)
+
+                    # C.7 - MCP Visibility: Capture provider and latency
                     args_hash = hashlib.sha256(json.dumps(call.arguments, sort_keys=True).encode()).hexdigest()[:16]
-                    tool_calls_executed.append({
+                    tool_call_record = {
                         "tool_id": str(tool_id) if tool_id else call.name,
                         "args_hash": args_hash,
-                    })
+                        "provider": getattr(tool, "provider_id", ""),
+                        "latency_ms": tool_latency_ms,
+                    }
+                    
+                    if not tool_result.success:
+                        tool_call_record["failure_reason"] = tool_result.error or "Unknown error"
+                    
+                    tool_calls_executed.append(tool_call_record)
 
                     # Collect artifacts
                     if tool_result.artifacts:
@@ -421,8 +483,20 @@ Artifacts created: {len(artifacts_collected)}
 
         return result
 
-    async def _request_approval(self, app: "Aries", tier: int) -> tuple[bool, str]:
-        """Request approval for a risk tier.
+    async def _request_approval(
+        self, app: "Aries", tier: int, step_tier: int | None = None, 
+        tool_tier: int | None = None, tool_name: str | None = None,
+        tool_provider: str | None = None, escalation_reason: str | None = None
+    ) -> tuple[bool, str]:
+        """Request approval for a risk tier with tool intent disclosure.
+        
+        Args:
+            tier: Effective tier requiring approval
+            step_tier: Original step tier
+            tool_tier: Tool's risk tier
+            tool_name: Name of the tool
+            tool_provider: Provider of the tool (e.g., "MCP Desktop Commander")
+            escalation_reason: Why approval is needed (step vs tool)
         
         Returns:
             Tuple of (approved: bool, scope: str).
@@ -433,8 +507,22 @@ Artifacts created: {len(artifacts_collected)}
         }
         tier_name = tier_names.get(tier, f"Tier {tier} actions")
 
+        # C.2 - Tool Intent Disclosure
         console.print(f"\n[bold yellow]Approval Required[/bold yellow]")
-        console.print(f"Allow {tier_name} for this run?")
+        
+        if step_tier is not None and tool_tier is not None:
+            console.print(f"[dim]Step tier: {step_tier} ({'local write' if step_tier == 1 else 'read-only' if step_tier == 0 else tier_names.get(step_tier, 'unknown')})[/dim]")
+            console.print(f"[dim]Tool tier: {tool_tier} ({tier_names.get(tool_tier, 'unknown')})[/dim]")
+            console.print(f"[bold]Effective tier: {tier} (max of step and tool)[/bold]")
+            
+            if tool_name:
+                provider_display = f" ({tool_provider})" if tool_provider else ""
+                console.print(f"[dim]Tool: {tool_name}{provider_display}[/dim]")
+            
+            if escalation_reason:
+                console.print(f"[dim]Reason: {escalation_reason}[/dim]")
+        
+        console.print(f"\nAllow {tier_name} for this run?")
         response = await get_user_input("(Allow once / Allow for session / Deny) [o/s/N]: ")
 
         response_lower = response.strip().lower()
@@ -618,5 +706,313 @@ Artifacts created: {len(artifacts_collected)}
             display_warning("Cannot edit plan while run is executing. Pause first.")
             return
 
-        display_info("Plan editing not yet implemented. Use /run stop and start a new run with a refined goal.")
+        await self._edit_plan_interactive(app, app.current_run)
+
+    async def _handle_inspect(self, app: "Aries", run_id: str | None) -> None:
+        """Inspect a run (read-only)."""
+        # Initialize run manager if needed
+        if not hasattr(app, "run_manager"):
+            workspace_root = app.workspace.current.root if app.workspace.current else None
+            app.run_manager = RunManager(workspace_root)
+
+        # Get run to inspect
+        if run_id:
+            run = app.run_manager.load_run(run_id)
+            if not run:
+                display_error(f"Run '{run_id}' not found.")
+                return
+        elif app.current_run:
+            run = app.current_run
+        else:
+            display_error("No run specified and no active run.")
+            return
+
+        # Display run inspection
+        await self._display_run_inspection(app, run)
+
+    async def _handle_next(self, app: "Aries") -> None:
+        """Execute next step then pause (manual stepping mode)."""
+        if not app.current_run:
+            display_error("No active run.")
+            return
+
+        if app.current_run.status not in (RunStatus.RUNNING, RunStatus.PAUSED):
+            display_error(f"Run is not in a state that allows stepping (status: {app.current_run.status.value})")
+            return
+
+        # Set manual stepping mode
+        if not hasattr(app.current_run, "manual_stepping"):
+            app.current_run.manual_stepping = True
+        else:
+            app.current_run.manual_stepping = True
+
+        app.current_run.status = RunStatus.RUNNING
+        app.run_manager.save_run(app.current_run)
+
+        # Execute one step
+        if app.current_run.current_step_index < len(app.current_run.plan):
+            step = app.current_run.plan[app.current_run.current_step_index]
+            result = await self._execute_step(app, step, app.current_run.current_step_index, app.current_run)
+            app.current_run.set_step_result(result)
+            app.current_run.current_step_index += 1
+            app.current_run.status = RunStatus.PAUSED
+            app.run_manager.save_run(app.current_run)
+            display_success("Step executed. Run paused. Use /run next to continue or /run continue for automatic execution.")
+        else:
+            app.current_run.status = RunStatus.COMPLETED
+            app.current_run.completed_at = datetime.now()
+            app.run_manager.save_run(app.current_run)
+            await self._finalize_run(app, app.current_run)
+
+    async def _handle_continue(self, app: "Aries") -> None:
+        """Resume normal sequential execution (exit manual stepping mode)."""
+        if not app.current_run:
+            display_error("No active run.")
+            return
+
+        if hasattr(app.current_run, "manual_stepping"):
+            app.current_run.manual_stepping = False
+
+        if app.current_run.status == RunStatus.PAUSED:
+            app.current_run.status = RunStatus.RUNNING
+            app.run_manager.save_run(app.current_run)
+            display_success("Resuming automatic execution...")
+            await self._execute_run(app)
+        else:
+            display_error(f"Run is not paused (status: {app.current_run.status.value})")
+
+    async def _handle_resume_by_id(self, app: "Aries", run_id: str) -> None:
+        """Resume a specific run by ID."""
+        if not hasattr(app, "run_manager"):
+            workspace_root = app.workspace.current.root if app.workspace.current else None
+            app.run_manager = RunManager(workspace_root)
+
+        run = app.run_manager.load_run(run_id)
+        if not run:
+            display_error(f"Run '{run_id}' not found.")
+            return
+
+        if run.status != RunStatus.PAUSED:
+            display_error(f"Run '{run_id}' is not paused (status: {run.status.value}). Only paused runs can be resumed.")
+            return
+
+        app.current_run = run
+        app.current_run.status = RunStatus.RUNNING
+        app.run_manager.save_run(app.current_run)
+        display_success(f"Resuming run {run_id}...")
+        await self._execute_run(app)
+
+    async def _handle_archive(self, app: "Aries", run_id: str) -> None:
+        """Archive a run (mark as non-resumable)."""
+        if not hasattr(app, "run_manager"):
+            workspace_root = app.workspace.current.root if app.workspace.current else None
+            app.run_manager = RunManager(workspace_root)
+
+        run = app.run_manager.load_run(run_id)
+        if not run:
+            display_error(f"Run '{run_id}' not found.")
+            return
+
+        # Mark as archived
+        if not hasattr(run, "archived"):
+            run.archived = True
+        else:
+            run.archived = True
+
+        app.run_manager.save_run(run)
+        display_success(f"Run {run_id} archived.")
+
+    async def _display_run_inspection(self, app: "Aries", run: AgentRun) -> None:
+        """Display detailed run inspection (read-only)."""
+        # Metadata panel
+        duration = run.duration_seconds()
+        duration_str = f"{duration:.1f}s" if duration else "N/A"
+        metadata_text = f"""Run ID: {run.run_id}
+Goal: {run.goal}
+Status: {run.status.value}
+Started: {run.started_at.isoformat() if run.started_at else 'N/A'}
+Completed: {run.completed_at.isoformat() if run.completed_at else 'N/A'}
+Duration: {duration_str}
+Model: {run.model}
+Profile: {run.profile}
+Workspace: {run.workspace_name or 'N/A'}"""
+
+        metadata_panel = Panel(metadata_text, title="Run Metadata", border_style="cyan")
+        console.print(metadata_panel)
+
+        # Approvals panel
+        if run.approvals:
+            approvals_text = []
+            for tier, decision in sorted(run.approvals.items()):
+                status = "✓ Approved" if decision.approved else "✗ Denied"
+                approvals_text.append(f"Tier {tier}: {status} ({decision.scope}) - {decision.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+            approvals_panel = Panel("\n".join(approvals_text), title="Approval Decisions", border_style="yellow")
+            console.print(approvals_panel)
+        else:
+            approvals_panel = Panel("No approvals recorded", title="Approval Decisions", border_style="yellow")
+            console.print(approvals_panel)
+
+        # Plan panel
+        plan_text = []
+        for step in run.plan:
+            result = run.get_step_result(step.step_index)
+            if result:
+                status_icon = {
+                    StepStatus.COMPLETED: "✓",
+                    StepStatus.FAILED: "✗",
+                    StepStatus.SKIPPED: "⊘",
+                    StepStatus.CANCELLED: "⊘",
+                    StepStatus.PENDING: "○",
+                    StepStatus.RUNNING: "→",
+                }.get(result.status, "○")
+                artifact_count = len(result.artifacts) if result.artifacts else 0
+                plan_text.append(f"{status_icon} Step {step.step_index + 1}: {step.title} (Tier {step.risk_tier}) - {artifact_count} artifacts")
+            elif step.step_index == run.current_step_index:
+                plan_text.append(f"→ Step {step.step_index + 1}: {step.title} (Tier {step.risk_tier}) - Current")
+            else:
+                plan_text.append(f"○ Step {step.step_index + 1}: {step.title} (Tier {step.risk_tier}) - Pending")
+
+        plan_panel = Panel("\n".join(plan_text), title="Plan Steps", border_style="green")
+        console.print(plan_panel)
+
+        # Step details
+        if run.step_results:
+            console.print("\n[bold]Step Execution Details:[/bold]")
+            for step_index in sorted(run.step_results.keys()):
+                result = run.step_results[step_index]
+                step = next((s for s in run.plan if s.step_index == step_index), None)
+                step_title = step.title if step else f"Step {step_index + 1}"
+
+                details = f"""Step: {step_title}
+Status: {result.status.value}
+Summary: {result.summary}
+Tool Calls: {len(result.tool_calls)}
+Artifacts: {len(result.artifacts)}"""
+                if result.error:
+                    details += f"\nError: {result.error}"
+                if result.duration_ms:
+                    details += f"\nDuration: {result.duration_ms}ms"""
+
+                step_panel = Panel(details, title=f"Step {step_index + 1}", border_style="blue")
+                console.print(step_panel)
+
+    async def _edit_plan_interactive(self, app: "Aries", run: AgentRun) -> None:
+        """Interactive plan editing."""
+        if run.status != RunStatus.PAUSED:
+            display_error("Run must be paused to edit plan.")
+            return
+
+        console.print("\n[bold]Plan Editor[/bold]")
+        console.print("Available commands:")
+        console.print("  rename <n> <new_title> - Rename step n")
+        console.print("  intent <n> <new_intent> - Edit step intent")
+        console.print("  tier <n> <0-3> - Change step risk tier")
+        console.print("  reorder <n> <new_position> - Move step to new position")
+        console.print("  done - Finish editing")
+
+        # Show current plan
+        await self._handle_steps(app)
+
+        # Simple editing loop
+        while True:
+            try:
+                command = await get_user_input("\nEdit command (or 'done'): ")
+                command = command.strip()
+
+                if command == "done":
+                    break
+
+                parts = command.split()
+                if len(parts) < 3:
+                    display_error("Invalid command format.")
+                    continue
+
+                cmd = parts[0].lower()
+                try:
+                    step_num = int(parts[1])
+                    step_index = step_num - 1
+                except ValueError:
+                    display_error(f"Invalid step number: {parts[1]}")
+                    continue
+
+                if step_index < 0 or step_index >= len(run.plan):
+                    display_error(f"Step {step_num} does not exist.")
+                    continue
+
+                if cmd == "rename":
+                    new_title = " ".join(parts[2:])
+                    run.plan[step_index].title = new_title
+                    # Invalidate downstream results
+                    self._invalidate_downstream_results(run, step_index)
+                    app.run_manager.save_run(run)
+                    display_success(f"Step {step_num} renamed to: {new_title}")
+
+                elif cmd == "intent":
+                    new_intent = " ".join(parts[2:])
+                    run.plan[step_index].intent = new_intent
+                    app.run_manager.save_run(run)
+                    display_success(f"Step {step_num} intent updated.")
+
+                elif cmd == "tier":
+                    try:
+                        new_tier = int(parts[2])
+                        if new_tier < 0 or new_tier > 3:
+                            display_error("Risk tier must be 0-3")
+                            continue
+                        run.plan[step_index].risk_tier = new_tier
+                        # Invalidate downstream results
+                        self._invalidate_downstream_results(run, step_index)
+                        app.run_manager.save_run(run)
+                        display_success(f"Step {step_num} risk tier set to {new_tier}")
+                    except ValueError:
+                        display_error(f"Invalid tier: {parts[2]}")
+
+                elif cmd == "reorder":
+                    try:
+                        new_position = int(parts[2])
+                        new_index = new_position - 1
+                        if new_index < 0 or new_index >= len(run.plan):
+                            display_error(f"Invalid position: {new_position}")
+                            continue
+
+                        # Reorder step
+                        step = run.plan.pop(step_index)
+                        run.plan.insert(new_index, step)
+
+                        # Reassign step indices
+                        for idx, s in enumerate(run.plan):
+                            s.step_index = idx
+
+                        # Invalidate all results after the moved step
+                        min_affected = min(step_index, new_index)
+                        self._invalidate_downstream_results(run, min_affected)
+
+                        app.run_manager.save_run(run)
+                        display_success(f"Step {step_num} moved to position {new_position}")
+                    except ValueError:
+                        display_error(f"Invalid position: {parts[2]}")
+
+                else:
+                    display_error(f"Unknown command: {cmd}")
+
+            except KeyboardInterrupt:
+                display_info("\nEditing cancelled.")
+                break
+
+        # Record audit entry
+        if not hasattr(run, "audit_log"):
+            run.audit_log = []
+        run.audit_log.append({
+            "action": "plan_edited",
+            "timestamp": datetime.now().isoformat(),
+            "operator": "user",
+        })
+        app.run_manager.save_run(run)
+        display_success("Plan editing complete.")
+
+    def _invalidate_downstream_results(self, run: AgentRun, from_index: int) -> None:
+        """Invalidate step results from a given index onwards."""
+        to_remove = [idx for idx in run.step_results.keys() if idx >= from_index]
+        for idx in to_remove:
+            del run.step_results[idx]
 

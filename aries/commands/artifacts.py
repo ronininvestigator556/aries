@@ -11,7 +11,8 @@ from rich.text import Text
 from rich.syntax import Syntax
 
 from aries.commands.base import BaseCommand
-from aries.ui.display import display_error
+from aries.core.run_manager import RunManager
+from aries.ui.display import display_error, display_info
 
 if TYPE_CHECKING:
     from aries.cli import Aries
@@ -22,7 +23,7 @@ console = Console()
 class ArtifactsCommand(BaseCommand):
     name = "artifacts"
     description = "Browse and inspect workspace artifacts"
-    usage = "[list] [--type TYPE] [--limit N] | open <id>"
+    usage = "[list] [--type TYPE] [--limit N] | open <id> | run [run_id]"
 
     async def execute(self, app: "Aries", args: str) -> None:
         """Execute the artifacts command."""
@@ -34,6 +35,9 @@ class ArtifactsCommand(BaseCommand):
                 display_error("Usage: /artifacts open <id>")
                 return
             await self._open_artifact(app, args_list[1])
+        elif subcmd == "run":
+            run_id = args_list[1] if len(args_list) > 1 else None
+            await self._list_run_artifacts(app, run_id)
         elif subcmd == "list":
             self._list_artifacts(app, args_list[1:])
         else:
@@ -136,6 +140,42 @@ class ArtifactsCommand(BaseCommand):
 
         except Exception as e:
             display_error(f"Failed to read artifact: {e}")
+
+    async def _list_run_artifacts(self, app: "Aries", run_id: str | None) -> None:
+        """List artifacts grouped by step for a run."""
+        # Initialize run manager if needed
+        if not hasattr(app, "run_manager"):
+            workspace_root = app.workspace.current.root if app.workspace.current else None
+            app.run_manager = RunManager(workspace_root)
+
+        # Get run
+        if run_id:
+            run = app.run_manager.load_run(run_id)
+            if not run:
+                display_error(f"Run '{run_id}' not found.")
+                return
+        elif hasattr(app, "current_run") and app.current_run:
+            run = app.current_run
+        else:
+            display_error("No run specified and no active run.")
+            return
+
+        console.print(f"\n[bold]Artifacts for Run: {run.run_id}[/bold]")
+
+        # Group artifacts by step
+        for step in run.plan:
+            result = run.get_step_result(step.step_index)
+            if result and result.artifacts:
+                console.print(f"\n[cyan]Step {step.step_index + 1}: {step.title}[/cyan]")
+                for artifact in result.artifacts:
+                    artifact_id = artifact.get("id") or artifact.get("path", "unknown")
+                    artifact_name = artifact.get("name") or artifact.get("path", "unnamed")
+                    console.print(f"  - {artifact_name} (ID: {artifact_id[:16] if isinstance(artifact_id, str) else str(artifact_id)[:16]})")
+            elif result:
+                console.print(f"\n[dim]Step {step.step_index + 1}: {step.title} - No artifacts[/dim]")
+
+        if not any(run.get_step_result(s.step_index) and run.get_step_result(s.step_index).artifacts for s in run.plan):
+            display_info("No artifacts found for this run.")
 
     def _format_size(self, size: int) -> str:
         for unit in ['B', 'KB', 'MB', 'GB']:

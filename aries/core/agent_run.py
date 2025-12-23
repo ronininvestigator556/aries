@@ -177,6 +177,9 @@ class AgentRun:
     profile: str = ""
     workspace_name: str | None = None
     cancellation_token: CancellationToken | None = None
+    manual_stepping: bool = False
+    archived: bool = False
+    audit_log: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -193,6 +196,9 @@ class AgentRun:
             "model": self.model,
             "profile": self.profile,
             "workspace_name": self.workspace_name,
+            "manual_stepping": getattr(self, "manual_stepping", False),
+            "archived": getattr(self, "archived", False),
+            "audit_log": getattr(self, "audit_log", []),
         }
 
     @classmethod
@@ -224,6 +230,11 @@ class AgentRun:
             profile=data.get("profile", ""),
             workspace_name=data.get("workspace_name"),
         )
+        # Set optional attributes
+        run.manual_stepping = data.get("manual_stepping", False)
+        run.archived = data.get("archived", False)
+        run.audit_log = data.get("audit_log", [])
+        return run
 
     def get_current_step(self) -> PlanStep | None:
         """Get the current step being executed."""

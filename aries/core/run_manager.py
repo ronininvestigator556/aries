@@ -189,7 +189,19 @@ class RunManager:
                 for tool_call in result.tool_calls:
                     tool_id = tool_call.get("tool_id", tool_call.get("name", "unknown"))
                     args_hash = tool_call.get("args_hash", "")
-                    md_lines.append(f"  - `{tool_id}` (args: {args_hash[:16]}...)")
+                    provider = tool_call.get("provider", "")
+                    latency_ms = tool_call.get("latency_ms")
+                    failure_reason = tool_call.get("failure_reason")
+                    
+                    call_line = f"  - `{tool_id}`"
+                    if provider:
+                        call_line += f" ({provider})"
+                    if latency_ms is not None:
+                        call_line += f" [{latency_ms}ms]"
+                    call_line += f" (args: {args_hash[:16]}...)"
+                    if failure_reason:
+                        call_line += f" [Failed: {failure_reason}]"
+                    md_lines.append(call_line)
 
             if result.artifacts:
                 md_lines.append("- **Artifacts**:")

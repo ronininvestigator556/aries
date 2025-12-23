@@ -28,7 +28,8 @@ class BaseTool(ABC):
     mutates_state: bool = False
     emits_artifacts: bool = False
     risk_level: Literal["read", "write", "exec"] = "read"
-    requires_network: bool = False
+    transport_requires_network: bool = False
+    tool_requires_network: bool = False
     requires_shell: bool = False
     path_params: tuple[str, ...] = ()
     
@@ -54,16 +55,22 @@ class BaseTool(ABC):
         """
         pass
     
-    def to_ollama_format(self) -> dict[str, Any]:
+    @property
+    def requires_network(self) -> bool:
+        """Effective network requirement including transport + tool intent."""
+        return bool(self.transport_requires_network or self.tool_requires_network)
+
+    def to_ollama_format(self, *, name: str | None = None) -> dict[str, Any]:
         """Convert tool to Ollama tool format.
         
         Returns:
             Dictionary suitable for Ollama tools parameter.
         """
+        tool_name = name or self.name
         return {
             "type": "function",
             "function": {
-                "name": self.name,
+                "name": tool_name,
                 "description": self.description,
                 "parameters": self.parameters,
             },

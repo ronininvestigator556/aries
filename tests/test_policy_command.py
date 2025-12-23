@@ -104,3 +104,19 @@ async def test_policy_explain_marks_confirmation_for_write(tmp_path: Path, capsy
 
     output = capsys.readouterr().out
     assert "Confirmation required: yes" in output
+
+
+@pytest.mark.anyio
+async def test_policy_explain_shows_network_semantics(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    config = _make_config(tmp_path)
+    config.tools.allow_network = True
+
+    app = Aries(config)
+    command = PolicyCommand()
+
+    await command.execute(app, 'explain search_web {"query":"hi"}')
+
+    output = capsys.readouterr().out
+    assert "transport=False" in output
+    assert "tool=True" in output
+    assert "effective=True" in output

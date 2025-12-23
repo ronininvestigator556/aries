@@ -236,7 +236,8 @@ class MCPTool(BaseTool):
         provider_id: str,
         provider_version: str,
         warn: Callable[[str, str], None],
-        default_requires_network: bool = False,
+        default_transport_requires_network: bool = False,
+        default_tool_requires_network: bool = False,
         default_requires_shell: bool = False,
     ) -> None:
         self.server_id = server_id
@@ -249,10 +250,11 @@ class MCPTool(BaseTool):
         self.provider_id = provider_id
         self.provider_version = provider_version
         self.risk_level = self._map_risk(definition.risk)
-        self.requires_network = (
+        self.transport_requires_network = default_transport_requires_network
+        self.tool_requires_network = (
             bool(definition.requires_network)
             if definition.requires_network is not None
-            else default_requires_network
+            else default_tool_requires_network
         )
         self.requires_shell = (
             bool(definition.requires_shell)
@@ -304,10 +306,21 @@ class MCPTool(BaseTool):
         properties = {}
         if isinstance(self.parameters, dict):
             properties = self.parameters.get("properties") or {}
-        if properties:
-            allowed_keys = set(properties.keys())
-            filtered = {k: v for k, v in filtered.items() if k in allowed_keys}
-        return filtered
+
+        allowed_keys = set(properties.keys()) if isinstance(properties, dict) else set()
+        if allowed_keys:
+            unknown = [key for key in filtered if key not in allowed_keys]
+            if unknown:
+                raise ValueError(
+                    f"Unknown argument(s) for MCP tool '{self.name}': {', '.join(sorted(unknown))}"
+                )
+            return {k: v for k, v in filtered.items() if k in allowed_keys}
+
+        if filtered:
+            raise ValueError(
+                f"Unknown argument(s) for MCP tool '{self.name}': {', '.join(sorted(filtered))}"
+            )
+        return {}
 
 
 class MCPProvider(Provider):
@@ -359,7 +372,7 @@ class MCPProvider(Provider):
 
         self.connected = True
         self.provider_version = version or "unknown"
-        requires_network = bool(server_config.url)
+        transport_requires_network = bool(server_config.url)
         requires_shell = bool(server_config.command)
 
         for tool_def in tools:
@@ -376,7 +389,8 @@ class MCPProvider(Provider):
                 provider_id=self.provider_id,
                 provider_version=self.provider_version,
                 warn=self._warn_once,
-                default_requires_network=requires_network,
+                default_transport_requires_network=transport_requires_network,
+                default_tool_requires_network=False,
                 default_requires_shell=requires_shell,
             )
             self._tools.append(wrapper)

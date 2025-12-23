@@ -44,12 +44,22 @@ class ToolPolicy:
     def evaluate(self, tool: BaseTool, args: dict[str, Any], *, workspace: Path | None = None) -> PolicyDecision:
         risk = getattr(tool, "risk_level", "read")
         mutates_state = bool(getattr(tool, "mutates_state", False))
+        network_required = bool(
+            getattr(tool, "requires_network", False)
+            or getattr(tool, "transport_requires_network", False)
+            or getattr(tool, "tool_requires_network", False)
+        )
 
         if getattr(tool, "requires_shell", False) and not self.config.allow_shell:
             return PolicyDecision(False, f"Shell execution disabled by policy (risk={risk})")
 
-        if getattr(tool, "requires_network", False) and not self.config.allow_network:
-            return PolicyDecision(False, f"Network tools disabled by policy (risk={risk})")
+        if network_required and not self.config.allow_network:
+            return PolicyDecision(
+                False,
+                f"Network tools disabled by policy "
+                f"(transport_requires_network={getattr(tool, 'transport_requires_network', False)}, "
+                f"tool_requires_network={getattr(tool, 'tool_requires_network', False)}, risk={risk})",
+            )
 
         for path_param in getattr(tool, "path_params", ()):
             if not self._path_allowed(args.get(path_param), workspace):

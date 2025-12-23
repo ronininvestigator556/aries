@@ -32,6 +32,17 @@ class HelpCommand(BaseCommand):
             # Show all commands
             commands = get_all_commands()
             display_command_help(commands)
+
+            if hasattr(app, "tool_registry"):
+                from rich.console import Console
+
+                console = Console()
+                console.print("\n[bold]Available Tools:[/bold]\n")
+                tool_ids = sorted(app.tool_registry.list_tool_ids(), key=lambda tid: tid.qualified)
+                for tid in tool_ids:
+                    suffix = f" (unqualified: {tid.tool_name})" if tid.is_qualified else ""
+                    console.print(f"  [cyan]{tid.qualified}[/cyan]{suffix}")
+                console.print()
         else:
             # Show help for specific command
             cmd = get_command(args)

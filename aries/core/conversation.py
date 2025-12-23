@@ -179,7 +179,10 @@ class Conversation:
         parsed: list[ToolCall] = []
         for call in tool_calls:
             function = call.get("function", {})
-            arguments = function.get("arguments", {})
+            arguments = function.get("arguments")
+            if arguments is None:
+                arguments = {}
+                
             if isinstance(arguments, str):
                 try:
                     arguments = json.loads(arguments)

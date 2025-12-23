@@ -43,6 +43,12 @@ from aries.ui.input import get_user_input
 console = Console()
 logger = logging.getLogger(__name__)
 
+# Internal classification constants
+EMPTY_ASSISTANT_RESPONSE = "empty_assistant_response"
+TOOL_CALL_PARSE_ERROR = "tool_call_parse_error"
+TOOL_CALL_INVALID_ARGUMENTS = "tool_call_invalid_arguments"
+NON_ACTIONABLE_RESPONSE = "non_actionable_response"
+
 
 class Aries:
     """Main Aries application class."""
@@ -404,13 +410,23 @@ class Aries:
         properties = schema.get("properties") if isinstance(schema, dict) else {}
         allowed_keys = set(properties.keys()) if isinstance(properties, dict) else set()
 
-        unknown = [key for key in args if key not in allowed_keys]
+        # Check for unknown keys
+        unknown = [key for key in args if key not in allowed_keys and key != "__raw_arguments"]
         if unknown:
             allowed_display = ", ".join(sorted(allowed_keys)) if allowed_keys else "none declared"
             raise ValueError(
                 f"Unknown argument(s) for tool '{getattr(tool, 'qualified_id', tool.name)}': "
                 f"{', '.join(sorted(unknown))}. Allowed keys: {allowed_display}"
             )
+
+        # Check for required keys
+        required = schema.get("required", []) if isinstance(schema, dict) else []
+        if required and isinstance(required, list):
+            missing = [key for key in required if key not in args or args[key] in (None, "")]
+            if missing:
+                raise ValueError(
+                    f"Missing required argument(s) for tool '{tool.name}': {', '.join(missing)}"
+                )
 
         if not allowed_keys:
             return dict(args)
@@ -454,6 +470,26 @@ class Aries:
             "transport_requires_network": getattr(tool, "transport_requires_network", False),
             "tool_requires_network": getattr(tool, "tool_requires_network", False),
         }
+
+        # Check for malformed JSON arguments
+        if "__raw_arguments" in call.arguments:
+            msg = "Tool call arguments could not be parsed (malformed JSON)."
+            result = ToolResult(
+                success=False,
+                content="",
+                error=msg,
+                metadata={"policy": "malformed_args", "duration_ms": 0},
+            )
+            audit.update(
+                {
+                    "decision": "malformed_args",
+                    "output_sha256": None,
+                    "output_size": 0,
+                    "error": msg,
+                    "raw_arguments": call.arguments.get("__raw_arguments"),
+                }
+            )
+            return result, audit
 
         try:
             filtered_args = self._validate_tool_arguments(tool, call.arguments)
@@ -765,13 +801,59 @@ class Aries:
             )
             return []
     
+    def _is_non_actionable(self, content: str) -> bool:
+        """Check if response content is effectively non-actionable."""
+        cleaned = content.strip()
+        if not cleaned:
+            return False  # Empty is handled as EMPTY_ASSISTANT_RESPONSE
+        
+        # Heuristic: < 15 chars (e.g. "Okay.", "I will.", "Thinking...")
+        return len(cleaned) < 15
+
     async def _execute_tool_calls(self, tool_calls: Iterable[ToolCall]) -> None:
         """Execute tool calls requested by the assistant."""
         max_display_chars = 2000
 
         for call in tool_calls:
+            # Guard: Malformed JSON or Parse Error
+            if "__raw_arguments" in call.arguments:
+                msg = "Tool call was received but could not be executed due to invalid or empty arguments."
+                display_warning(msg)
+                self.conversation.add_tool_result_message(
+                    tool_call_id=call.id or call.name,
+                    content=msg,
+                    success=False,
+                    error=TOOL_CALL_PARSE_ERROR,
+                    tool_name=call.name,
+                )
+                self._log_transcript(
+                    "tool",
+                    msg,
+                    msg_id=str(uuid.uuid4()),
+                    extra={
+                        "tool_name": call.name,
+                        "status": "fail",
+                        "error": TOOL_CALL_PARSE_ERROR,
+                        "raw_arguments": call.arguments.get("__raw_arguments"),
+                    },
+                )
+                continue
+
             tool_id, tool, error = self._resolve_tool_reference(call.name)
             tool_label = getattr(tool_id, "qualified", None) or call.name
+
+            # Guard: Missing Tool Name (if parse passed but name missing)
+            if not call.name:
+                msg = "Tool call was received but could not be executed (missing tool name)."
+                display_warning(msg)
+                self.conversation.add_tool_result_message(
+                    tool_call_id=call.id,
+                    content=msg,
+                    success=False,
+                    error=TOOL_CALL_PARSE_ERROR,
+                )
+                continue
+
             if error or tool is None:
                 display_error(error or f"Unknown tool requested: {call.name}")
                 self.conversation.add_tool_result_message(
@@ -782,6 +864,32 @@ class Aries:
                     tool_name=tool_label,
                 )
                 continue
+
+            # Guard: Empty Arguments when Required
+            schema = getattr(tool, "parameters", {})
+            required_params = schema.get("required", []) if isinstance(schema, dict) else []
+            if not call.arguments and required_params:
+                msg = "Tool call was received but could not be executed due to invalid or empty arguments."
+                display_warning(msg)
+                self.conversation.add_tool_result_message(
+                    tool_call_id=call.id or call.name,
+                    content=msg,
+                    success=False,
+                    error=TOOL_CALL_INVALID_ARGUMENTS,
+                    tool_name=tool_label,
+                )
+                self._log_transcript(
+                    "tool",
+                    msg,
+                    msg_id=str(uuid.uuid4()),
+                    extra={
+                        "tool_name": tool_label,
+                        "status": "fail",
+                        "error": TOOL_CALL_INVALID_ARGUMENTS,
+                    },
+                )
+                continue
+
             result, audit = await self._run_tool(tool, call, tool_id)
             result.metadata = result.metadata or {}
 
@@ -884,13 +992,24 @@ class Aries:
             if response_text.strip():
                 console.print(f"\n{response_text}\n")
         
+        classification = None
         if not response_text.strip():
             display_warning(
                 "(Model returned an empty response — try rephrasing or switching models. Use /last for details.)"
             )
+            classification = EMPTY_ASSISTANT_RESPONSE
+        elif self._is_non_actionable(response_text):
+            display_warning("Model response contained no actionable content.")
+            console.print("[dim]Try rephrasing, switching models, or using /help.[/dim]")
+            classification = NON_ACTIONABLE_RESPONSE
 
         self.conversation.add_assistant_message(response_text)
-        self._log_transcript("assistant", response_text, msg_id=str(uuid.uuid4()))
+        
+        extra = {}
+        if classification:
+            extra["classification"] = classification
+            
+        self._log_transcript("assistant", response_text, msg_id=str(uuid.uuid4()), extra=extra)
     
     def stop(self) -> None:
         """Stop the application loop."""

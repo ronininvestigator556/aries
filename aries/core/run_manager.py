@@ -30,7 +30,8 @@ class RunManager:
     def _ensure_runs_dir(self) -> None:
         """Ensure runs directory exists."""
         if self.workspace_root:
-            self.runs_dir = self.workspace_root / ".aries" / "runs"
+            # Use a predictable runs directory within the workspace root for persistence and tests
+            self.runs_dir = self.workspace_root / "runs"
             self.runs_dir.mkdir(parents=True, exist_ok=True)
 
     def save_run(self, run: AgentRun) -> None:
@@ -163,7 +164,7 @@ class RunManager:
             "## Step-by-Step Execution Log",
             "",
         ])
-        for result in run.step_results:
+        for result in sorted(run.step_results.values(), key=lambda r: r.step_index):
             step = next((s for s in run.plan if s.step_index == result.step_index), None)
             step_title = step.title if step else f"Step {result.step_index + 1}"
 
@@ -215,7 +216,7 @@ class RunManager:
             md_lines.append("")
 
         # Errors and recoveries
-        errors = [r for r in run.step_results if r.error]
+        errors = [r for r in run.step_results.values() if r.error]
         if errors:
             md_lines.extend([
                 "## Errors and Recoveries",
@@ -264,7 +265,10 @@ class RunManager:
             "workspace_name": run.workspace_name,
             "approvals": {str(k): v.to_dict() for k, v in run.approvals.items()},
             "plan": [step.to_dict() for step in run.plan],
-            "step_results": [result.to_dict() for result in run.step_results],
+            "step_results": [
+                result.to_dict()
+                for result in sorted(run.step_results.values(), key=lambda r: r.step_index)
+            ],
         }
 
         return markdown_content, json_data
@@ -295,4 +299,3 @@ class RunManager:
         json_path.write_text(json.dumps(json_data, indent=2), encoding="utf-8")
 
         return md_path
-

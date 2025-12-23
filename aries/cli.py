@@ -11,6 +11,7 @@ This module handles:
 import asyncio
 import hashlib
 import logging
+import re
 import time
 import uuid
 from pathlib import Path
@@ -403,6 +404,10 @@ class Aries:
         schema = getattr(tool, "parameters", {}) or {}
         properties = schema.get("properties") if isinstance(schema, dict) else {}
         allowed_keys = set(properties.keys()) if isinstance(properties, dict) else set()
+        required_fields = schema.get("required") if isinstance(schema, dict) else []
+        if not isinstance(required_fields, (list, tuple)):
+            required_fields = []
+        required_fields = [field for field in required_fields if isinstance(field, str) and field]
 
         unknown = [key for key in args if key not in allowed_keys]
         if unknown:
@@ -411,6 +416,24 @@ class Aries:
                 f"Unknown argument(s) for tool '{getattr(tool, 'qualified_id', tool.name)}': "
                 f"{', '.join(sorted(unknown))}. Allowed keys: {allowed_display}"
             )
+
+        if required_fields:
+            # Enforce only explicitly-declared required fields; empty schemas allow empty args
+            missing = []
+            for field in required_fields:
+                if field not in args:
+                    missing.append(field)
+                    continue
+                value = args.get(field)
+                if value is None:
+                    missing.append(field)
+                elif isinstance(value, str) and not value.strip():
+                    missing.append(field)
+            if missing:
+                raise ValueError(
+                    f"Missing required argument(s) for tool '{getattr(tool, 'qualified_id', tool.name)}': "
+                    f"{', '.join(sorted(missing))}"
+                )
 
         if not allowed_keys:
             return dict(args)
@@ -429,6 +452,53 @@ class Aries:
         if len(text) <= limit:
             return text, False
         return text[:limit] + f"\n... (truncated, {len(text)} total chars)", True
+
+    def _is_non_actionable_response(self, content: str, *, tool_calls_present: bool = False) -> bool:
+        """Heuristic to detect acknowledgments that do not reflect actionable output."""
+        if tool_calls_present:
+            return False
+
+        text = (content or "").strip()
+        if not text:
+            return False
+        if len(text) > 40:
+            return False
+
+        if re.search(r"^[\s]*[-*•#]", text, re.MULTILINE):
+            return False
+        if re.search(r"\d", text):
+            return False
+        if re.search(r"(?:/|\\)\\S", text):
+            return False
+
+        lowered = text.lower()
+        verbs = ("created", "saved", "found", "updated", "wrote", "generated", "executed")
+        if any(verb in lowered for verb in verbs):
+            return False
+
+        cleaned = re.sub(r"[^\w\s]", " ", lowered)
+        words = [w for w in cleaned.split() if w]
+        acknowledgment_tokens = {
+            "ok",
+            "okay",
+            "sure",
+            "roger",
+            "got",
+            "it",
+            "gotcha",
+            "understood",
+            "noted",
+            "alright",
+            "k",
+        }
+        if not words or len(words) > 4:
+            return False
+        if any(len(w) > 12 for w in words):
+            return False
+        if not all(w in acknowledgment_tokens for w in words):
+            return False
+
+        return True
 
     async def _confirm_tool_execution(self, tool: BaseTool, args: dict[str, Any]) -> bool:
         """Prompt the user to confirm a mutating tool run."""
@@ -846,7 +916,8 @@ class Aries:
             if result.success:
                 console.print(f"[green]✓ {summary}[/green]")
             else:
-                display_error(f"{summary} ({result.error})")
+                error_detail = result.error or "Unknown error"
+                display_error(f"{summary}\nReason: {error_detail}")
             
             if output and result.success:
                 display_output = output[:max_display_chars]
@@ -887,6 +958,11 @@ class Aries:
         if not response_text.strip():
             display_warning(
                 "(Model returned an empty response — try rephrasing or switching models. Use /last for details.)"
+            )
+        elif self._is_non_actionable_response(response_text, tool_calls_present=False):
+            # Guard against acknowledgement-only replies that provide no actionable detail
+            display_warning(
+                "(Assistant responded with an acknowledgement-only message; provide more detail or request a specific action.)"
             )
 
         self.conversation.add_assistant_message(response_text)

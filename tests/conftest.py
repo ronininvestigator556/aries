@@ -1,5 +1,6 @@
 import base64
 import sys
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,37 @@ if str(PROJECT_ROOT) not in sys.path:
 from aries import config as config_module  # noqa: E402
 from aries.config import Config  # noqa: E402
 from aries.core import ollama_client as ollama_client_module  # noqa: E402
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register custom markers used in the test suite."""
+    config.addinivalue_line("markers", "asyncio: mark test as requiring an asyncio event loop")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
+    """Provide lightweight asyncio support when pytest-asyncio is unavailable."""
+    testfunction = pyfuncitem.obj
+    if not asyncio.iscoroutinefunction(testfunction):
+        return None
+
+    if pyfuncitem.get_closest_marker("anyio"):
+        # Let anyio plugin handle its own marked tests
+        return None
+
+    if not pyfuncitem.get_closest_marker("asyncio"):
+        return None
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        argnames = getattr(pyfuncitem._fixtureinfo, "argnames", ())
+        funcargs = {name: pyfuncitem.funcargs[name] for name in argnames}
+        loop.run_until_complete(testfunction(**funcargs))
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
+    return True
 
 
 @pytest.fixture(autouse=True)

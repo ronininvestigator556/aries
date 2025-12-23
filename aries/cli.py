@@ -93,6 +93,28 @@ class Aries:
         self._apply_profile(default_profile)
         self._initialize_default_workspace()
 
+        # Phase A: Console State
+        self.last_action_summary: str = "Ready"
+        self.last_action_details: dict[str, Any] | None = None
+        self.last_action_status: str = "Idle"
+        self.next_input_default: str = ""
+        self.processing_task: asyncio.Task | None = None
+
+    def _get_status_bar(self) -> Any:
+        """Generate status bar content."""
+        from prompt_toolkit.formatted_text import HTML
+        
+        ws = self.workspace.current.name if self.workspace.current else "default"
+        model = self.current_model
+        profile = self.current_prompt or "default"
+        rag = f"RAG:{self.current_rag}" if self.current_rag else "RAG:off"
+        status = self.last_action_status
+        last_action = self.last_action_summary
+        
+        return HTML(
+            f" <b>WS:</b> {ws} | <b>Model:</b> {model} | <b>Profile:</b> {profile} | <b>{rag}</b> | {status} | <i>{last_action}</i>"
+        )
+
     def _warn_once(self, key: str, message: str) -> None:
         """Emit a warning message once per key."""
         if key in self._warnings_shown:
@@ -469,15 +491,38 @@ class Aries:
         # Main loop
         while self.running:
             try:
-                user_input = await get_user_input()
+                default_text = self.next_input_default
+                self.next_input_default = ""
+                user_input = await get_user_input(
+                    status_callback=self._get_status_bar,
+                    default=default_text
+                )
                 
                 if not user_input.strip():
                     continue
                 
-                await self.process_input(user_input)
+                # Execute process_input as a cancellable task
+                self.processing_task = asyncio.create_task(self.process_input(user_input))
+                try:
+                    await self.processing_task
+                except asyncio.CancelledError:
+                    # Task was cancelled, already handled in KeyboardInterrupt block or task logic
+                    pass
+                finally:
+                    self.processing_task = None
+                    self.last_action_status = "Idle"
                 
             except KeyboardInterrupt:
-                console.print("\n[dim]Use /exit to quit[/dim]")
+                if self.processing_task and not self.processing_task.done():
+                    console.print("\n[yellow]Cancelling...[/yellow]")
+                    self.processing_task.cancel()
+                    try:
+                        await self.processing_task
+                    except asyncio.CancelledError:
+                        pass
+                    self.last_action_summary = "Cancelled"
+                else:
+                    console.print("\n[dim]Use /exit to quit[/dim]")
             except EOFError:
                 break
             except AriesError as e:
@@ -495,6 +540,7 @@ class Aries:
             user_input: Raw user input string.
         """
         user_input = user_input.strip()
+        self.last_action_status = "Running"
         
         # Check if it's a command
         if is_command(user_input):
@@ -517,7 +563,14 @@ class Aries:
             display_error(f"Unknown command: /{cmd_name}\nType /help for available commands.")
             return
         
-        await command.execute(self, args)
+        try:
+            await command.execute(self, args)
+            self.last_action_summary = f"Command /{cmd_name} executed"
+            self.last_action_details = {"command": cmd_name, "args": args, "timestamp": time.time()}
+        except Exception as e:
+            self.last_action_summary = f"Command /{cmd_name} failed"
+            self.last_action_details = {"command": cmd_name, "args": args, "error": str(e), "timestamp": time.time()}
+            raise e
     
     async def handle_chat(self, message: str) -> None:
         """Handle a chat message - send to LLM and display response.
@@ -672,10 +725,33 @@ class Aries:
             )
             self._maybe_register_artifact(result, tool)
             
+            # Phase A: Summary and State Update
+            duration_s = (audit.get("duration_ms", 0) or 0) / 1000.0
+            artifact_count = len(result.artifacts) if result.artifacts else 0
+            # Also count artifacts in metadata if not in direct list (legacy)
+            if not result.artifacts and result.metadata and result.metadata.get("artifact"):
+                 # Simple heuristic, full counting is in _maybe_register_artifact but we want a quick number
+                 artifact_count = 1
+            
+            status_str = "Done" if result.success else "Failed"
+            summary = f"{status_str}: {tool_label} → {artifact_count} artifacts, {duration_s:.2f}s"
+            
+            self.last_action_summary = summary
+            self.last_action_status = "Idle"
+            self.last_action_details = {
+                "tool": tool_label,
+                "status": "success" if result.success else "error",
+                "duration_ms": audit.get("duration_ms"),
+                "artifacts": artifact_count,
+                "input": audit.get("input"),
+                "error": result.error,
+                "timestamp": time.time()
+            }
+
             if result.success:
-                display_info(f"Tool {tool_label} executed")
+                console.print(f"[green]✓ {summary}[/green]")
             else:
-                display_error(f"Tool {tool_label} failed: {result.error}")
+                display_error(f"{summary} ({result.error})")
             
             if output:
                 display_output = output[:max_display_chars]

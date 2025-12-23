@@ -13,6 +13,10 @@ from aries.commands.search import SearchCommand
 from aries.commands.workspace import WorkspaceCommand
 from aries.commands.profile import ProfileCommand
 from aries.commands.policy import PolicyCommand
+from aries.commands.palette import PaletteCommand
+from aries.commands.last import LastCommand
+from aries.commands.artifacts import ArtifactsCommand
+from aries.commands.cancel import CancelCommand
 
 # Command registry. The help command is resolved lazily to avoid circular import.
 COMMANDS: dict[str, type[BaseCommand] | None] = {
@@ -26,6 +30,10 @@ COMMANDS: dict[str, type[BaseCommand] | None] = {
     "workspace": WorkspaceCommand,
     "profile": ProfileCommand,
     "policy": PolicyCommand,
+    "palette": PaletteCommand,
+    "last": LastCommand,
+    "artifacts": ArtifactsCommand,
+    "cancel": CancelCommand,
 }
 
 

@@ -25,6 +25,9 @@ def _get_history_path() -> Path:
     return history_dir / "history"
 
 
+from prompt_toolkit.formatted_text import HTML
+from typing import Callable, Any
+
 # Global session (lazy initialized)
 _session: PromptSession | None = None
 
@@ -43,11 +46,17 @@ def _get_session() -> PromptSession:
     return _session
 
 
-async def get_user_input(prompt: str = ">>> ") -> str:
+async def get_user_input(
+    prompt: str = ">>> ",
+    status_callback: Callable[[], Any] | None = None,
+    default: str = "",
+) -> str:
     """Get user input asynchronously.
     
     Args:
         prompt: Prompt string to display.
+        status_callback: Optional callback that returns content for the bottom toolbar.
+        default: Default text to pre-fill in the prompt.
         
     Returns:
         User's input string.
@@ -60,6 +69,8 @@ async def get_user_input(prompt: str = ">>> ") -> str:
         None,
         lambda: session.prompt(
             [("class:prompt", prompt)],
+            bottom_toolbar=status_callback,
+            default=default,
         )
     )
     return result

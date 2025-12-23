@@ -858,19 +858,20 @@ class Aries:
         """Stream the assistant's final response and record it."""
         messages = self.conversation.get_messages_for_ollama()
         
+        response_text = ""
         if self.config.ui.stream_output:
-            console.print()
-            response_text = ""
-            
             async for chunk in self.ollama.chat_stream(
                 model=self.current_model,
                 messages=messages,
                 tools=self.tool_definitions or None,
             ):
+                if not response_text:
+                    console.print()
                 console.print(chunk, end="")
                 response_text += chunk
             
-            console.print("\n")
+            if response_text:
+                console.print("\n")
         else:
             if initial_response is not None:
                 response_text = initial_response
@@ -879,8 +880,15 @@ class Aries:
                     model=self.current_model,
                     messages=messages,
                 )
-            console.print(f"\n{response_text}\n")
+            
+            if response_text.strip():
+                console.print(f"\n{response_text}\n")
         
+        if not response_text.strip():
+            display_warning(
+                "(Model returned an empty response — try rephrasing or switching models. Use /last for details.)"
+            )
+
         self.conversation.add_assistant_message(response_text)
         self._log_transcript("assistant", response_text, msg_id=str(uuid.uuid4()))
     

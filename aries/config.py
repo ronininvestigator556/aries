@@ -153,12 +153,20 @@ class MCPServerConfig(BaseModel):
         return self
 
 
+class MCPRetryConfig(BaseModel):
+    """Retry settings for MCP server startup connectivity."""
+
+    attempts: int = Field(default=0, ge=0, le=3, description="Number of retry attempts")
+    backoff_seconds: float = Field(default=0.5, ge=0.0, description="Delay between retries")
+
+
 class MCPProvidersConfig(BaseModel):
     """Configuration for MCP tool providers."""
 
     enabled: bool = False
     require: bool = False
     servers: list[MCPServerConfig] = Field(default_factory=list)
+    retry: MCPRetryConfig = Field(default_factory=MCPRetryConfig)
 
 
 class ProvidersConfig(BaseModel):

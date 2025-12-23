@@ -12,8 +12,10 @@ from aries.providers.core import CoreProvider
 from aries.providers.mcp import (
     MCPClientError,
     MCPProvider,
+    get_status,
     MCPToolCallResult,
     MCPToolDefinition,
+    reset_statuses,
 )
 
 
@@ -70,6 +72,13 @@ def _factory_for(tools: dict[str, list[MCPToolDefinition]], *, fail: bool = Fals
         return FakeMCPClient(server_config.id, tools.get(server_config.id, []), fail=fail)
 
     return _factory
+
+
+@pytest.fixture(autouse=True)
+def _clear_status_registry():
+    reset_statuses()
+    yield
+    reset_statuses()
 
 
 def test_mcp_disabled_registers_only_core(tmp_path) -> None:
@@ -164,6 +173,182 @@ def test_tool_collision_is_actionable() -> None:
     assert registry.resolve("mcp:collision:read_file") is not None
 
 
+def test_successful_connection_updates_status(tmp_path, monkeypatch) -> None:
+    config = _make_base_config(tmp_path)
+    config.providers.mcp.enabled = True
+    config.providers.mcp.servers = [MCPServerConfig(id="stub", url="http://stub")]
+    definitions = [
+        MCPToolDefinition(
+            name="stub_tool",
+            description="ok",
+            parameters={"type": "object", "properties": {}},
+        )
+    ]
+    monkeypatch.setattr(
+        "aries.providers.mcp.default_client_factory",
+        _factory_for({"stub": definitions}),
+    )
+
+    Aries(config)
+
+    status = get_status("stub")
+    assert status is not None
+    assert status.state == "connected"
+    assert status.tool_count == 1
+    assert status.last_connect_at is not None
+    assert status.last_success_at is not None
+
+
+def test_connection_failure_sets_error_status(tmp_path, monkeypatch) -> None:
+    config = _make_base_config(tmp_path)
+    config.providers.mcp.enabled = True
+    config.providers.mcp.servers = [MCPServerConfig(id="stub", url="http://stub")]
+
+    def _raise_client_error(*args, **kwargs):
+        raise MCPClientError("boom")
+
+    monkeypatch.setattr("aries.providers.mcp.default_client_factory", _raise_client_error)
+
+    app = Aries(config)
+    assert "mcp:stub" in app._warnings_shown
+
+    status = get_status("stub")
+    assert status is not None
+    assert status.state == "error"
+    assert status.last_error is not None
+    assert status.last_error_at is not None
+
+
+@pytest.mark.anyio
+async def test_invoke_failure_updates_error_status(tmp_path, monkeypatch) -> None:
+    class InvokeFailClient(FakeMCPClient):
+        def invoke(self, tool_name: str, arguments: dict) -> MCPToolCallResult:
+            raise MCPClientError("invoke failed")
+
+    config = _make_base_config(tmp_path)
+    server = MCPServerConfig(id="stub", url="http://stub")
+    tool_def = MCPToolDefinition(
+        name="stub_tool",
+        description="no risk",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    def _factory(_server_config: MCPServerConfig) -> InvokeFailClient:
+        return InvokeFailClient(server_id=_server_config.id, tools=[tool_def])
+
+    provider = MCPProvider(server, client_factory=_factory)
+    tool = provider.list_tools()[0]
+
+    result = await tool.execute()
+    assert not result.success
+
+    status = get_status("stub")
+    assert status is not None
+    assert status.state == "error"
+    assert status.last_error is not None
+    assert status.last_error_at is not None
+
+
+def test_retry_attempts_honored(tmp_path, monkeypatch) -> None:
+    class FlakyClient(FakeMCPClient):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self._attempts = 0
+
+        def connect(self) -> None:
+            self._attempts += 1
+            if self._attempts == 1:
+                raise MCPClientError("first failure")
+
+    config = _make_base_config(tmp_path)
+    config.providers.mcp.enabled = True
+    config.providers.mcp.servers = [MCPServerConfig(id="stub", url="http://stub")]
+    config.providers.mcp.retry.attempts = 1
+    definitions = [
+        MCPToolDefinition(
+            name="stub_tool",
+            description="ok",
+            parameters={"type": "object", "properties": {}},
+        )
+    ]
+
+    def _factory(_server_config: MCPServerConfig) -> FlakyClient:
+        return FlakyClient(server_id=_server_config.id, tools=definitions)
+
+    monkeypatch.setattr("aries.providers.mcp.default_client_factory", _factory)
+    Aries(config)
+
+    status = get_status("stub")
+    assert status is not None
+    assert status.state == "connected"
+    assert status.last_error is None
+
+
+@pytest.mark.anyio
+async def test_policy_show_includes_mcp_status(tmp_path, monkeypatch, capsys) -> None:
+    config = _make_base_config(tmp_path)
+    config.providers.mcp.enabled = True
+    config.providers.mcp.servers = [MCPServerConfig(id="stub", url="http://stub")]
+    definitions = [
+        MCPToolDefinition(
+            name="stub_tool",
+            description="ok",
+            parameters={"type": "object", "properties": {}},
+        )
+    ]
+    monkeypatch.setattr(
+        "aries.providers.mcp.default_client_factory",
+        _factory_for({"stub": definitions}),
+    )
+
+    app = Aries(config)
+    command = PolicyCommand()
+
+    await command.execute(app, "show")
+    output = capsys.readouterr().out
+
+    assert "MCP servers:" in output
+    assert "stub [http]" in output
+    assert "connected" in output
+    assert "tools=1" in output
+
+
+@pytest.mark.anyio
+async def test_policy_explain_shows_server_status(tmp_path, monkeypatch, capsys) -> None:
+    class InvokeFailClient(FakeMCPClient):
+        def invoke(self, tool_name: str, arguments: dict) -> MCPToolCallResult:
+            raise MCPClientError("invoke failed")
+
+    config = _make_base_config(tmp_path)
+    config.providers.mcp.enabled = True
+    config.providers.mcp.servers = [MCPServerConfig(id="stub", url="http://stub")]
+    definitions = [
+        MCPToolDefinition(
+            name="stub_tool",
+            description="ok",
+            parameters={"type": "object", "properties": {}},
+        )
+    ]
+
+    def _factory(_server_config: MCPServerConfig) -> InvokeFailClient:
+        return InvokeFailClient(server_id=_server_config.id, tools=definitions)
+
+    monkeypatch.setattr("aries.providers.mcp.default_client_factory", _factory)
+
+    app = Aries(config)
+    tool = app.tool_registry.resolve("stub_tool")
+    assert tool is not None
+    await tool.execute()
+
+    command = PolicyCommand()
+    await command.execute(app, "explain stub_tool {}")
+    output = capsys.readouterr().out
+
+    assert "Server status:" in output
+    assert "error" in output
+    assert "invoke failed" in output
+
+
 @pytest.mark.anyio
 async def test_policy_explain_shows_default_exec_for_mcp(tmp_path, monkeypatch, capsys) -> None:
     config = _make_base_config(tmp_path)
@@ -223,6 +408,7 @@ def test_mcp_transport_network_semantics() -> None:
 async def test_mcp_invocation_filters_arguments(tmp_path, monkeypatch) -> None:
     config = _make_base_config(tmp_path)
     config.tools.allow_network = True
+    config.tools.confirmation_required = False
     config.providers.mcp.enabled = True
     config.providers.mcp.require = True
     config.providers.mcp.servers = [MCPServerConfig(id="stub", url="http://stub")]

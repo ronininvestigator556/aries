@@ -66,7 +66,7 @@ Core capabilities already in the codebase include:
    - `/model <name>` — switch models.
    - `/workspace new <name>` — create a persistent workspace with transcripts and artifacts.
    - `/profile list` / `/profile use <name>` — view or apply YAML-defined behavior profiles.
-   - `/policy show` — inspect workspace-aware policy settings.
+   - `/policy show` — inspect workspace-aware policy settings (includes MCP server health).
    - `/policy explain <tool> <json_args>` — dry-run a tool policy decision (supports qualified ids like `core:write_file` or `mcp:myserver:search`).
    - `/help` — list commands.
    - `/clear` — reset conversation history.
@@ -95,6 +95,16 @@ Policy inspection examples:
 /policy explain mcp:myserver:search {"query":"security news"}
 ```
 
+### MCP server health
+
+MCP connectivity is tracked per server with a simple lifecycle model:
+
+- `connected`: last connect + tool listing succeeded; `tool_count` reflects the current tools.
+- `disconnected`: no successful connection yet.
+- `error`: last connect/list/invoke failed; `last_error` holds a short summary.
+
+Run `/policy show` to view the MCP Servers section (server id, transport, state, tool count, last connect, and last error summary). `/policy explain` for MCP tools also reports the server state and the latest error when not connected. If a server reports `error`, verify the endpoint/command and credentials, then retry by restarting Aries (or fix the server) — no background retries are performed. Optional startup retries can be enabled via `providers.mcp.retry`.
+
 ## Phase 2 golden path
 
 Follow this minimal flow to exercise the hardened features:
@@ -121,6 +131,9 @@ Key sections in `config.yaml`:
     mcp:
       enabled: true
       require: false
+      retry:
+        attempts: 0     # optional retries during startup connect/list
+        backoff_seconds: 0.5
       servers:
         - id: "mcp-local"
           url: "http://localhost:9000"

@@ -3,20 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 import logging
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from aries.config import MCPServerConfig
+from aries.config import MCPRetryConfig, MCPServerConfig
 from aries.exceptions import ConfigError
 from aries.providers.base import Provider
 from aries.tools.base import BaseTool, ToolResult
 
 logger = logging.getLogger(__name__)
+
+_MAX_ERROR_LEN = 500
 
 
 class MCPClientError(Exception):
@@ -244,6 +248,8 @@ class MCPTool(BaseTool):
         self._client = client
         self._definition = definition
         self._warn = warn
+        self._on_success: Callable[[], None] | None = None
+        self._on_error: Callable[[str], None] | None = None
 
         self.name = definition.name
         self.description = definition.description
@@ -287,7 +293,15 @@ class MCPTool(BaseTool):
         try:
             result = await asyncio.to_thread(self._client.invoke, self.name, arguments)
         except Exception as exc:
+            if self._on_error:
+                self._on_error(str(exc))
             return ToolResult(success=False, content="", error=str(exc))
+        if result.success:
+            if self._on_success:
+                self._on_success()
+        else:
+            if self._on_error:
+                self._on_error(result.error or "Unknown MCP tool error")
         return ToolResult(
             success=bool(result.success),
             content=result.content,
@@ -323,6 +337,76 @@ class MCPTool(BaseTool):
         return {}
 
 
+def _now() -> dt.datetime:
+    return dt.datetime.now(tz=dt.timezone.utc)
+
+
+@dataclass
+class MCPServerStatus:
+    """Lifecycle and health information for an MCP server."""
+
+    server_id: str
+    transport: str = "unknown"
+    state: str = "disconnected"
+    last_connect_at: dt.datetime | None = None
+    last_success_at: dt.datetime | None = None
+    last_error_at: dt.datetime | None = None
+    last_error: str | None = None
+    tool_count: int = 0
+
+    def note_connect_attempt(self) -> None:
+        self.last_connect_at = _now()
+        if self.state == "error":
+            # keep error state until success
+            return
+        self.state = "disconnected"
+
+    def mark_connected(self, *, tool_count: int) -> None:
+        self.state = "connected"
+        self.tool_count = tool_count
+        timestamp = _now()
+        self.last_success_at = timestamp
+        if not self.last_connect_at:
+            self.last_connect_at = timestamp
+        self.last_error = None
+        self.last_error_at = None
+
+    def mark_success(self) -> None:
+        self.state = "connected"
+        self.last_success_at = _now()
+
+    def mark_error(self, message: str) -> None:
+        self.state = "error"
+        self.last_error_at = _now()
+        self.last_error = (message or "").strip()
+        if len(self.last_error) > _MAX_ERROR_LEN:
+            self.last_error = self.last_error[:_MAX_ERROR_LEN]
+
+
+_STATUS_REGISTRY: dict[str, MCPServerStatus] = {}
+
+
+def register_status(status: MCPServerStatus) -> MCPServerStatus:
+    """Store and return a status entry for shared access."""
+    _STATUS_REGISTRY[status.server_id] = status
+    return status
+
+
+def get_status(server_id: str) -> MCPServerStatus | None:
+    """Return status for a given server id."""
+    return _STATUS_REGISTRY.get(server_id)
+
+
+def snapshot_statuses() -> list[MCPServerStatus]:
+    """Return a copy of all known statuses."""
+    return list(_STATUS_REGISTRY.values())
+
+
+def reset_statuses() -> None:
+    """Clear all known status entries (intended for tests)."""
+    _STATUS_REGISTRY.clear()
+
+
 class MCPProvider(Provider):
     """Provide tools sourced from MCP servers."""
 
@@ -333,6 +417,7 @@ class MCPProvider(Provider):
         client_factory: Callable[[MCPServerConfig], MCPClient] | None = None,
         strict: bool = False,
         logger: logging.Logger | None = None,
+        retry: MCPRetryConfig | None = None,
     ) -> None:
         self.server_id = server_config.id
         self.provider_id = f"mcp:{self.server_id}"
@@ -344,6 +429,15 @@ class MCPProvider(Provider):
         self._client_factory = client_factory or default_client_factory
         self._client = self._client_factory(server_config)
         self._tools: list[MCPTool] = []
+        self._retry = retry or MCPRetryConfig()
+        transport = "unknown"
+        if server_config.url:
+            transport = "http"
+        elif server_config.command:
+            transport = "command"
+        self.status = register_status(
+            MCPServerStatus(server_id=self.server_id, transport=transport)
+        )
         self._load_tools(server_config, strict=strict)
 
     def _warn_once(self, key: str, message: str) -> None:
@@ -354,8 +448,7 @@ class MCPProvider(Provider):
 
     def _load_tools(self, server_config: MCPServerConfig, *, strict: bool) -> None:
         try:
-            self._client.connect()
-            tools, version = self._client.list_tools()
+            tools, version = self._connect_and_list(server_config.id)
         except Exception as exc:
             self.failure_reason = str(exc)
             if strict:
@@ -393,18 +486,50 @@ class MCPProvider(Provider):
                 default_tool_requires_network=False,
                 default_requires_shell=requires_shell,
             )
+            wrapper._on_success = self._record_success
+            wrapper._on_error = self._record_error
             self._tools.append(wrapper)
 
     def list_tools(self) -> list[BaseTool]:
         return list(self._tools)
+
+    def _connect_and_list(self, server_id: str) -> tuple[list[MCPToolDefinition], str | None]:
+        attempts_remaining = max(0, self._retry.attempts)
+        last_error: Exception | None = None
+
+        while True:
+            self.status.note_connect_attempt()
+            try:
+                self._client.connect()
+                tools, version = self._client.list_tools()
+                self.status.mark_connected(tool_count=len(tools))
+                return tools, version
+            except Exception as exc:
+                last_error = exc
+                self.status.mark_error(str(exc))
+                if attempts_remaining <= 0:
+                    raise
+                attempts_remaining -= 1
+                time.sleep(self._retry.backoff_seconds)
+
+    def _record_success(self) -> None:
+        self.status.mark_success()
+
+    def _record_error(self, message: str) -> None:
+        self.status.mark_error(message)
 
 
 __all__ = [
     "MCPClient",
     "MCPClientError",
     "MCPProvider",
+    "MCPServerStatus",
     "MCPTool",
     "MCPToolCallResult",
     "MCPToolDefinition",
     "default_client_factory",
+    "get_status",
+    "register_status",
+    "reset_statuses",
+    "snapshot_statuses",
 ]

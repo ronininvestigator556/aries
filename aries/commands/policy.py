@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from rich.panel import Panel
 from rich.table import Table
+from rich.markup import escape
 
 from aries.commands.base import BaseCommand
 from aries.core.tool_policy import PolicyDecision
@@ -19,6 +20,8 @@ from aries.ui.display import console, display_error
 
 if TYPE_CHECKING:
     from aries.cli import Aries
+
+from aries.providers.mcp import get_status, snapshot_statuses
 
 
 class PolicyCommand(BaseCommand):
@@ -100,14 +103,17 @@ class PolicyCommand(BaseCommand):
         server_lines = [
             f"{sid}: {len(tools_by_server.get(sid, []))} tools" for sid in sorted(tools_by_server)
         ]
-        mcp_state = sorted(getattr(app, "_mcp_state", []), key=lambda entry: entry.get("id", ""))
+        mcp_statuses = sorted(snapshot_statuses(), key=lambda entry: entry.server_id)
         mcp_lines: list[str] = []
-        for entry in mcp_state:
-            status = "connected" if entry.get("connected") else "disconnected"
-            descriptor = f"{entry.get('id')} ({status}, {entry.get('tools', 0)} tools)"
-            if entry.get("reason") and not entry.get("connected"):
-                descriptor += f" - {entry['reason']}"
-            mcp_lines.append(descriptor)
+        for entry in mcp_statuses:
+            descriptor = (
+                f"{entry.server_id} [{entry.transport}] "
+                f"{entry.state}, tools={entry.tool_count}, "
+                f"last_connect={entry.last_connect_at or 'n/a'}"
+            )
+            if entry.last_error:
+                descriptor += f", last_error={entry.last_error}"
+            mcp_lines.append(escape(descriptor))
 
         table = Table.grid(padding=(0, 1))
         table.add_row("Workspace:", workspace_label)
@@ -203,6 +209,12 @@ class PolicyCommand(BaseCommand):
         server_id = getattr(tool, "server_id", None)
         if server_id:
             meta_table.add_row("Server:", server_id)
+            status = get_status(server_id)
+            if status:
+                status_label = f"{status.state}"
+                if status.state != "connected" and status.last_error:
+                    status_label += f" (last_error={status.last_error})"
+                meta_table.add_row("Server status:", status_label)
         meta_table.add_row("Risk level:", getattr(tool, "risk_level", "unknown"))
         meta_table.add_row(
             "Network requirements:",

@@ -442,27 +442,28 @@ Use the available tools to accomplish this step. Call the appropriate tools to p
                     result.status = StepStatus.FAILED
                     result.error = "No tool calls or content generated"
 
-            # Generate summary
-            summary_prompt = f"""Summarize what happened in step "{step.title}" in 1-2 sentences.
-            
+            if result.status == StepStatus.RUNNING:
+                # Generate summary only when the step completed without validation failures
+                summary_prompt = f"""Summarize what happened in step "{step.title}" in 1-2 sentences.
+                
 Tool calls made: {len(tool_calls_executed)}
 Artifacts created: {len(artifacts_collected)}
 """
 
-            summary_response = await app.ollama.chat(
-                model=app.current_model,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": summary_prompt},
-                ],
-                raw=True,
-            )
+                summary_response = await app.ollama.chat(
+                    model=app.current_model,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": summary_prompt},
+                    ],
+                    raw=True,
+                )
 
-            summary_content = summary_response.get("message", {}).get("content", "") if isinstance(summary_response, dict) else str(summary_response)
-            summary = summary_content.strip() or f"Executed step: {step.title}"
-
-            result.status = StepStatus.COMPLETED if result.status == StepStatus.RUNNING else result.status
-            result.summary = summary
+                summary_content = summary_response.get("message", {}).get("content", "") if isinstance(summary_response, dict) else str(summary_response)
+                result.summary = summary_content.strip() or f"Executed step: {step.title}"
+                result.status = StepStatus.COMPLETED
+            else:
+                result.summary = result.error or f"Step {step_index + 1} failed before tool execution"
             result.tool_calls = tool_calls_executed
             result.artifacts = artifacts_collected
 
@@ -1015,4 +1016,3 @@ Artifacts: {len(result.artifacts)}"""
         to_remove = [idx for idx in run.step_results.keys() if idx >= from_index]
         for idx in to_remove:
             del run.step_results[idx]
-

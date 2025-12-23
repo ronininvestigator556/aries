@@ -11,10 +11,11 @@ This module handles:
 import asyncio
 import hashlib
 import logging
+import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from rich.console import Console
 
@@ -31,13 +32,15 @@ from aries.exceptions import FileToolError
 from aries.core.tool_validation import validate_tools
 from aries.core.tokenizer import TokenEstimator
 from aries.exceptions import AriesError, ConfigError
-from aries.rag.indexer import Indexer
-from aries.rag.retriever import Retriever
 from aries.providers import CoreProvider, MCPProvider
 from aries.providers.mcp import MCPServerStatus, register_status
 from aries.tools.base import BaseTool, ToolResult
 from aries.ui.display import display_error, display_info, display_warning, display_welcome
 from aries.ui.input import get_user_input
+
+if TYPE_CHECKING:
+    from aries.rag.indexer import Indexer
+    from aries.rag.retriever import Retriever
 
 
 console = Console()
@@ -81,8 +84,9 @@ class Aries:
         self.tool_policy = ToolPolicy(config.tools)
         self.workspace = WorkspaceManager(config.workspace, config.tools)
         self.ollama = OllamaClient(config.ollama)
-        self.indexer = Indexer(config.rag, self.ollama, token_estimator=self._token_estimator)
-        self.retriever = Retriever(config.rag, self.ollama)
+        self.indexer: "Indexer | None" = None
+        self.retriever: "Retriever | None" = None
+        self._rag_import_error: Exception | None = None
         self.running = True
         self.current_model: str = config.ollama.default_model
         self.current_rag: str | None = None
@@ -143,6 +147,36 @@ class Aries:
             return
         display_warning(message)
         self._warnings_shown.add(key)
+
+    def _ensure_rag_components(self) -> bool:
+        """Initialize optional RAG components without forcing heavy dependencies."""
+        if self.indexer and self.retriever:
+            return True
+        if self._rag_import_error:
+            return False
+        try:
+            from aries.rag.indexer import Indexer
+            from aries.rag.retriever import Retriever
+        except Exception as exc:  # pragma: no cover - environment-specific imports
+            self._rag_import_error = exc
+            self.indexer = None
+            self.retriever = None
+            return False
+
+        self.indexer = Indexer(
+            self.config.rag, self.ollama, token_estimator=self._token_estimator
+        )
+        self.retriever = Retriever(self.config.rag, self.ollama)
+        if self.workspace.current:
+            self._apply_workspace_index_path()
+        return True
+
+    def rag_dependency_message(self) -> str:
+        """Return a user-friendly message for missing RAG extras."""
+        base = "RAG features require optional dependencies. Install with `pip install -e \".[rag]\"`."
+        if self._rag_import_error:
+            base = f"{base} ({self._rag_import_error})"
+        return base
 
     def _register_mcp_providers(self) -> None:
         """Register MCP providers when enabled."""
@@ -409,6 +443,10 @@ class Aries:
         schema = getattr(tool, "parameters", {}) or {}
         properties = schema.get("properties") if isinstance(schema, dict) else {}
         allowed_keys = set(properties.keys()) if isinstance(properties, dict) else set()
+        required_fields = schema.get("required") if isinstance(schema, dict) else []
+        if not isinstance(required_fields, (list, tuple)):
+            required_fields = []
+        required_fields = [field for field in required_fields if isinstance(field, str) and field]
 
         # Check for unknown keys
         unknown = [key for key in args if key not in allowed_keys and key != "__raw_arguments"]
@@ -419,13 +457,22 @@ class Aries:
                 f"{', '.join(sorted(unknown))}. Allowed keys: {allowed_display}"
             )
 
-        # Check for required keys
-        required = schema.get("required", []) if isinstance(schema, dict) else []
-        if required and isinstance(required, list):
-            missing = [key for key in required if key not in args or args[key] in (None, "")]
+        if required_fields:
+            # Enforce only explicitly-declared required fields; empty schemas allow empty args
+            missing = []
+            for field in required_fields:
+                if field not in args:
+                    missing.append(field)
+                    continue
+                value = args.get(field)
+                if value is None:
+                    missing.append(field)
+                elif isinstance(value, str) and not value.strip():
+                    missing.append(field)
             if missing:
                 raise ValueError(
-                    f"Missing required argument(s) for tool '{tool.name}': {', '.join(missing)}"
+                    f"Missing required argument(s) for tool '{getattr(tool, 'qualified_id', tool.name)}': "
+                    f"{', '.join(sorted(missing))}"
                 )
 
         if not allowed_keys:
@@ -445,6 +492,53 @@ class Aries:
         if len(text) <= limit:
             return text, False
         return text[:limit] + f"\n... (truncated, {len(text)} total chars)", True
+
+    def _is_non_actionable_response(self, content: str, *, tool_calls_present: bool = False) -> bool:
+        """Heuristic to detect acknowledgments that do not reflect actionable output."""
+        if tool_calls_present:
+            return False
+
+        text = (content or "").strip()
+        if not text:
+            return False
+        if len(text) > 40:
+            return False
+
+        if re.search(r"^[\s]*[-*•#]", text, re.MULTILINE):
+            return False
+        if re.search(r"\d", text):
+            return False
+        if re.search(r"(?:/|\\)\\S", text):
+            return False
+
+        lowered = text.lower()
+        verbs = ("created", "saved", "found", "updated", "wrote", "generated", "executed")
+        if any(verb in lowered for verb in verbs):
+            return False
+
+        cleaned = re.sub(r"[^\w\s]", " ", lowered)
+        words = [w for w in cleaned.split() if w]
+        acknowledgment_tokens = {
+            "ok",
+            "okay",
+            "sure",
+            "roger",
+            "got",
+            "it",
+            "gotcha",
+            "understood",
+            "noted",
+            "alright",
+            "k",
+        }
+        if not words or len(words) > 4:
+            return False
+        if any(len(w) > 12 for w in words):
+            return False
+        if not all(w in acknowledgment_tokens for w in words):
+            return False
+
+        return True
 
     async def _confirm_tool_execution(self, tool: BaseTool, args: dict[str, Any]) -> bool:
         """Prompt the user to confirm a mutating tool run."""
@@ -769,6 +863,10 @@ class Aries:
 
     async def _retrieve_context(self, query: str):
         """Fetch RAG context if an index is active."""
+        if not self._ensure_rag_components() or not self.retriever:
+            self._warn_once("rag:missing", self.rag_dependency_message())
+            return []
+
         try:
             chunks = await self.retriever.retrieve(query)
             handles = self.retriever.last_handles
@@ -801,15 +899,6 @@ class Aries:
             )
             return []
     
-    def _is_non_actionable(self, content: str) -> bool:
-        """Check if response content is effectively non-actionable."""
-        cleaned = content.strip()
-        if not cleaned:
-            return False  # Empty is handled as EMPTY_ASSISTANT_RESPONSE
-        
-        # Heuristic: < 15 chars (e.g. "Okay.", "I will.", "Thinking...")
-        return len(cleaned) < 15
-
     async def _execute_tool_calls(self, tool_calls: Iterable[ToolCall]) -> None:
         """Execute tool calls requested by the assistant."""
         max_display_chars = 2000
@@ -954,7 +1043,8 @@ class Aries:
             if result.success:
                 console.print(f"[green]✓ {summary}[/green]")
             else:
-                display_error(f"{summary} ({result.error})")
+                error_detail = result.error or "Unknown error"
+                display_error(f"{summary}\nReason: {error_detail}")
             
             if output and result.success:
                 display_output = output[:max_display_chars]
@@ -997,11 +1087,11 @@ class Aries:
             display_warning(
                 "(Model returned an empty response — try rephrasing or switching models. Use /last for details.)"
             )
-            classification = EMPTY_ASSISTANT_RESPONSE
-        elif self._is_non_actionable(response_text):
-            display_warning("Model response contained no actionable content.")
-            console.print("[dim]Try rephrasing, switching models, or using /help.[/dim]")
-            classification = NON_ACTIONABLE_RESPONSE
+        elif self._is_non_actionable_response(response_text, tool_calls_present=False):
+            # Guard against acknowledgement-only replies that provide no actionable detail
+            display_warning(
+                "(Assistant responded with an acknowledgement-only message; provide more detail or request a specific action.)"
+            )
 
         self.conversation.add_assistant_message(response_text)
         
@@ -1089,7 +1179,7 @@ class Aries:
             registry.register_file(path, description=description, source=source, extra=extra)
 
     def _apply_workspace_index_path(self) -> None:
-        if self.workspace.current:
+        if self.workspace.current and self.indexer and self.retriever:
             index_dir = self.workspace.current.index_dir
             self.indexer.config.indices_dir = index_dir
             self.retriever.config.indices_dir = index_dir

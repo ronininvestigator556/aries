@@ -21,6 +21,10 @@ class RAGCommand(BaseCommand):
     usage = "[list|off|<index_name>|add <path> [name]|index add <path> [name]|use <name>|drop <name>|show <handle>|last]"
 
     async def execute(self, app: "Aries", args: str) -> None:
+        if not app._ensure_rag_components():
+            display_error(app.rag_dependency_message())
+            return
+
         args = args.strip()
 
         if not args or args == "list":

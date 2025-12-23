@@ -17,16 +17,54 @@ Unlike typical chatbots or autonomous agents, ARIES is built for **humans who ne
 ## ⚡ Quick Start
 
 ### 1. Prerequisites
-*   **Python 3.11+**
-*   **Ollama:** Install from [ollama.com](https://ollama.com) and pull a model (e.g., `ollama pull llama3`).
+-   **Python 3.11 or 3.12 recommended.** Windows users should avoid Python 3.14 for now because binary wheels for optional libraries (e.g., `chromadb`, `numpy`, `unstructured`) may be missing and will trigger slow source builds.
+-   **Ollama:** Install from [ollama.com](https://ollama.com) and pull a model (e.g., `ollama pull llama3`).
+-   **PowerShell users:** Commands below avoid `||` and are safe to paste directly.
 
-### 2. Installation
-```bash
-# Clone the repo and install dependencies
+### 2. Installation (PowerShell-safe copy/paste)
+Clone the repo, move into it, create a virtual environment, then pick ONE install target below:
+
+```powershell
 git clone https://github.com/your-repo/aries.git
 cd aries
-pip install -e .
 ```
+
+```powershell
+# Windows PowerShell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+# macOS/Linux
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+**Base runtime/CLI (no RAG, no dev tooling)**
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+**Developer tools only (tests/linters, still no RAG)**
+```powershell
+python -m pip install -e ".[dev]"
+```
+
+**RAG features (document indexing/retrieval)**
+```powershell
+python -m pip install -e ".[rag]"
+```
+
+**Full stack (dev + RAG)**
+```powershell
+python -m pip install -e ".[all]"
+```
+
+#### Network/Proxy installs
+- Corporate proxies: append `--proxy http://user:pass@proxy:port` to any `pip` command when needed.
+- Restricted networks/build isolation errors: rerun the install with `--no-build-isolation` (e.g., `python -m pip install -e ".[rag]" --no-build-isolation`) after ensuring build tools are available.
+
+#### Optional dependency behavior
+- The base CLI imports cleanly without RAG libraries. `/rag` commands lazily import optional components and will show a friendly message telling you to install `.[rag]` instead of crashing when extras are missing.
 
 ### 3. Configuration
 Copy the example config and check your settings:

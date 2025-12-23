@@ -4,7 +4,6 @@ Agent Run Manager - handles persistence and run report generation.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -22,16 +21,20 @@ class RunManager:
         Args:
             workspace_root: Root directory of workspace. If None, runs are not persisted.
         """
-        self.workspace_root = workspace_root
+        self.workspace_root = Path(workspace_root) if workspace_root else None
         self.runs_dir: Path | None = None
-        if workspace_root:
+        if self.workspace_root:
             self._ensure_runs_dir()
 
     def _ensure_runs_dir(self) -> None:
         """Ensure runs directory exists."""
-        if self.workspace_root:
-            self.runs_dir = self.workspace_root / ".aries" / "runs"
-            self.runs_dir.mkdir(parents=True, exist_ok=True)
+        if not self.workspace_root:
+            self.runs_dir = None
+            return
+
+        # Use a predictable runs directory within the workspace root for persistence and tests
+        self.runs_dir = Path(self.workspace_root) / "runs"
+        self.runs_dir.mkdir(parents=True, exist_ok=True)
 
     def save_run(self, run: AgentRun) -> None:
         """Save run metadata to disk.
@@ -39,10 +42,16 @@ class RunManager:
         Args:
             run: AgentRun to save.
         """
-        if not self.runs_dir:
+        if not self.workspace_root:
             return
 
-        run_file = self.runs_dir / f"{run.run_id}.json"
+        self._ensure_runs_dir()
+        if not self.runs_dir:
+            raise RuntimeError("Runs directory could not be initialized for persistence.")
+
+        safe_run_id = Path(run.run_id).name
+        run_file = self.runs_dir / f"{safe_run_id}.json"
+        run_file.parent.mkdir(parents=True, exist_ok=True)
         run_file.write_text(json.dumps(run.to_dict(), indent=2), encoding="utf-8")
 
     def load_run(self, run_id: str) -> AgentRun | None:
@@ -54,10 +63,14 @@ class RunManager:
         Returns:
             AgentRun if found, None otherwise.
         """
+        if not self.workspace_root:
+            return None
+
+        self._ensure_runs_dir()
         if not self.runs_dir:
             return None
 
-        run_file = self.runs_dir / f"{run_id}.json"
+        run_file = self.runs_dir / f"{Path(run_id).name}.json"
         if not run_file.exists():
             return None
 
@@ -76,6 +89,10 @@ class RunManager:
         Returns:
             List of run IDs.
         """
+        if not self.workspace_root:
+            return []
+
+        self._ensure_runs_dir()
         if not self.runs_dir:
             return []
 
@@ -163,7 +180,7 @@ class RunManager:
             "## Step-by-Step Execution Log",
             "",
         ])
-        for result in run.step_results:
+        for result in sorted(run.step_results.values(), key=lambda r: r.step_index):
             step = next((s for s in run.plan if s.step_index == result.step_index), None)
             step_title = step.title if step else f"Step {result.step_index + 1}"
 
@@ -215,7 +232,7 @@ class RunManager:
             md_lines.append("")
 
         # Errors and recoveries
-        errors = [r for r in run.step_results if r.error]
+        errors = [r for r in run.step_results.values() if r.error]
         if errors:
             md_lines.extend([
                 "## Errors and Recoveries",
@@ -264,7 +281,10 @@ class RunManager:
             "workspace_name": run.workspace_name,
             "approvals": {str(k): v.to_dict() for k, v in run.approvals.items()},
             "plan": [step.to_dict() for step in run.plan],
-            "step_results": [result.to_dict() for result in run.step_results],
+            "step_results": [
+                result.to_dict()
+                for result in sorted(run.step_results.values(), key=lambda r: r.step_index)
+            ],
         }
 
         return markdown_content, json_data
@@ -295,4 +315,3 @@ class RunManager:
         json_path.write_text(json.dumps(json_data, indent=2), encoding="utf-8")
 
         return md_path
-

@@ -13,6 +13,7 @@ from rich.table import Table
 
 from aries.commands.base import BaseCommand
 from aries.core.tool_policy import PolicyDecision
+from aries.core.tool_registry import AmbiguousToolError
 from aries.core.workspace import resolve_and_validate_path
 from aries.ui.display import console, display_error
 
@@ -90,9 +91,14 @@ class PolicyCommand(BaseCommand):
         denylist = getattr(app.config.tools, "denylist", None) or getattr(app.config.tools, "denied_tools", None)
         providers = app.tool_registry.providers if hasattr(app, "tool_registry") else {}
         tools_by_provider = app.tool_registry.tools_by_provider() if hasattr(app, "tool_registry") else {}
+        tools_by_server = app.tool_registry.tools_by_server() if hasattr(app, "tool_registry") else {}
+        collisions = app.tool_registry.collisions() if hasattr(app, "tool_registry") else {}
         provider_lines = [
             f"{pid} (v{getattr(provider, 'provider_version', 'unknown')}): {len(tools_by_provider.get(pid, []))} tools"
             for pid, provider in sorted(providers.items())
+        ]
+        server_lines = [
+            f"{sid}: {len(tools_by_server.get(sid, []))} tools" for sid in sorted(tools_by_server)
         ]
         mcp_state = sorted(getattr(app, "_mcp_state", []), key=lambda entry: entry.get("id", ""))
         mcp_lines: list[str] = []
@@ -111,8 +117,12 @@ class PolicyCommand(BaseCommand):
         table.add_row("Confirmation:", "; ".join(confirmation_lines))
         if provider_lines:
             table.add_row("Providers:", "; ".join(provider_lines))
+        if server_lines:
+            table.add_row("Servers:", "; ".join(server_lines))
         if mcp_lines:
             table.add_row("MCP servers:", "; ".join(mcp_lines))
+        if collisions:
+            table.add_row("Tool collisions:", f"{len(collisions)} ambiguous name(s)")
         table.add_row("Allowed roots:", ", ".join(allow_roots) if allow_roots else "none")
         table.add_row("Denied roots:", ", ".join(deny_roots) if deny_roots else "none")
         if allowlist:
@@ -139,10 +149,24 @@ class PolicyCommand(BaseCommand):
         return ordered
 
     async def _explain(self, app: "Aries", tool_name: str, args: dict[str, Any]) -> None:
-        tool = app.tool_map.get(tool_name)
-        if tool is None:
-            known = ", ".join(sorted(app.tool_map))
+        try:
+            resolved = app.tool_registry.resolve_with_id(tool_name)
+        except AmbiguousToolError as exc:
+            candidates = ", ".join(sorted(c.qualified for c in exc.candidates))
+            display_error(f"Tool '{tool_name}' is ambiguous. Candidates: {candidates}")
+            return
+
+        if not resolved:
+            known = ", ".join(sorted(app.tool_registry.tools))
             display_error(f"Unknown tool: {tool_name}. Known tools: {known}")
+            return
+
+        tool_id, tool = resolved
+
+        try:
+            filtered_args = app._validate_tool_arguments(tool, args)
+        except ValueError as exc:
+            display_error(str(exc))
             return
 
         workspace = app.workspace.current.root if app.workspace.current else None
@@ -150,11 +174,11 @@ class PolicyCommand(BaseCommand):
         path_errors: dict[str, str] = {}
 
         for param in getattr(tool, "path_params", ()):
-            if param not in args:
+            if param not in filtered_args:
                 continue
             try:
                 resolved = resolve_and_validate_path(
-                    args[param],
+                    filtered_args[param],
                     workspace=workspace,
                     allowed_paths=getattr(app.tool_policy, "allowed_paths", None),
                     denied_paths=getattr(app.tool_policy, "denied_paths", None),
@@ -168,12 +192,12 @@ class PolicyCommand(BaseCommand):
             reason = "; ".join(sorted(path_errors.values()))
             decision = PolicyDecision(False, f"Path validation failed: {reason}")
         else:
-            decision = app.tool_policy.evaluate(tool, args, workspace=workspace)
+            decision = app.tool_policy.evaluate(tool, filtered_args, workspace=workspace)
 
         confirmation_needed = app.config.tools.confirmation_required and app._requires_confirmation(tool)
 
         meta_table = Table.grid(padding=(0, 1))
-        meta_table.add_row("Tool:", tool.name)
+        meta_table.add_row("Tool:", tool_id.qualified)
         meta_table.add_row("Provider:", getattr(tool, "provider_id", "unknown"))
         meta_table.add_row("Provider version:", getattr(tool, "provider_version", "unknown"))
         server_id = getattr(tool, "server_id", None)
@@ -181,9 +205,16 @@ class PolicyCommand(BaseCommand):
             meta_table.add_row("Server:", server_id)
         meta_table.add_row("Risk level:", getattr(tool, "risk_level", "unknown"))
         meta_table.add_row(
+            "Network requirements:",
+            "transport="
+            f"{getattr(tool, 'transport_requires_network', False)}, "
+            "tool="
+            f"{getattr(tool, 'tool_requires_network', False)}, "
+            f"effective={getattr(tool, 'requires_network', False)}",
+        )
+        meta_table.add_row(
             "Capabilities:",
             f"emits_artifacts={getattr(tool, 'emits_artifacts', False)}, "
-            f"requires_network={getattr(tool, 'requires_network', False)}, "
             f"requires_shell={getattr(tool, 'requires_shell', False)}",
         )
         meta_table.add_row("Path params:", ", ".join(getattr(tool, "path_params", ())) or "none")

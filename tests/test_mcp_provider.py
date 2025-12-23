@@ -5,6 +5,7 @@ import pytest
 from aries.cli import Aries
 from aries.commands.policy import PolicyCommand
 from aries.config import Config, MCPServerConfig
+from aries.core.message import ToolCall
 from aries.core.tool_registry import ToolRegistry
 from aries.exceptions import ConfigError
 from aries.providers.core import CoreProvider
@@ -132,7 +133,7 @@ def test_registry_registers_mcp_tools_with_provenance() -> None:
 
     tool = registry.resolve("mcp_echo")
     assert tool is not None
-    assert getattr(tool, "provider_id", "") == "mcp:mcp-local"
+    assert getattr(tool, "provider_id", "") == "mcp"
     assert getattr(tool, "provider_version", "") == "1.0.0"
     assert getattr(tool, "server_id", "") == "mcp-local"
     assert getattr(tool, "risk_level", "") == "read"
@@ -153,14 +154,14 @@ def test_tool_collision_is_actionable() -> None:
     registry = ToolRegistry()
     registry.register_provider(CoreProvider())
 
-    with pytest.raises(ValueError) as excinfo:
-        registry.register_provider(provider)
+    registry.register_provider(provider)
 
-    message = str(excinfo.value)
-    assert "Tool name collision detected" in message
-    assert "read_file" in message
-    assert "core" in message
-    assert "mcp:collision" in message
+    with pytest.raises(Exception) as excinfo:
+        registry.resolve("read_file")
+
+    assert "qualified" in str(excinfo.value) or "ambiguous" in str(excinfo.value)
+    assert registry.resolve("core:read_file") is not None
+    assert registry.resolve("mcp:collision:read_file") is not None
 
 
 @pytest.mark.anyio
@@ -188,6 +189,67 @@ async def test_policy_explain_shows_default_exec_for_mcp(tmp_path, monkeypatch, 
     await command.execute(app, "explain stub_tool {}")
     output = capsys.readouterr().out
 
-    assert "mcp:stub" in output
+    assert "mcp" in output
     assert "risk level" in output.lower()
     assert "exec" in output.lower()
+
+
+def test_mcp_transport_network_semantics() -> None:
+    tool_def = MCPToolDefinition(
+        name="ping",
+        description="noop",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    url_provider = MCPProvider(
+        MCPServerConfig(id="net", url="http://stub"),
+        client_factory=_factory_for({"net": [tool_def]}),
+    )
+    cmd_provider = MCPProvider(
+        MCPServerConfig(id="cmd", command=["echo", "{}"]),
+        client_factory=_factory_for({"cmd": [tool_def]}),
+    )
+
+    url_tool = url_provider.list_tools()[0]
+    cmd_tool = cmd_provider.list_tools()[0]
+
+    assert getattr(url_tool, "transport_requires_network", False) is True
+    assert getattr(url_tool, "requires_network", False) is True
+    assert getattr(cmd_tool, "transport_requires_network", False) is False
+    assert getattr(cmd_tool, "requires_network", False) is False
+
+
+@pytest.mark.anyio
+async def test_mcp_invocation_filters_arguments(tmp_path, monkeypatch) -> None:
+    config = _make_base_config(tmp_path)
+    config.tools.allow_network = True
+    config.providers.mcp.enabled = True
+    config.providers.mcp.require = True
+    config.providers.mcp.servers = [MCPServerConfig(id="stub", url="http://stub")]
+
+    definitions = [
+        MCPToolDefinition(
+            name="echo",
+            description="echo",
+            parameters={"type": "object", "properties": {"message": {"type": "string"}}},
+        )
+    ]
+    captured: dict[str, FakeMCPClient] = {}
+
+    def _capturing_factory(server_config: MCPServerConfig) -> FakeMCPClient:
+        client = FakeMCPClient(server_config.id, definitions)
+        captured["client"] = client
+        return client
+
+    monkeypatch.setattr("aries.providers.mcp.default_client_factory", _capturing_factory)
+
+    app = Aries(config)
+    tool_id, tool = app.tool_registry.resolve_with_id("mcp:stub:echo")
+    call = ToolCall(id="tool1", name=tool_id.qualified, arguments={"message": "hi"})
+
+    result, audit = await app._run_tool(tool, call, tool_id)
+
+    assert result.success
+    assert audit["qualified_tool_id"] == tool_id.qualified
+    client = captured["client"]
+    assert client.invocations and client.invocations[0][1] == {"message": "hi"}

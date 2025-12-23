@@ -24,7 +24,7 @@ from aries.core.conversation import Conversation
 from aries.core.message import ToolCall
 from aries.core.ollama_client import OllamaClient
 from aries.core.tool_policy import ToolPolicy
-from aries.core.tool_registry import ToolRegistry
+from aries.core.tool_registry import AmbiguousToolError, ToolRegistry
 from aries.core.profile import Profile, ProfileManager
 from aries.core.workspace import ArtifactRef, TranscriptEntry, WorkspaceManager
 from aries.exceptions import FileToolError
@@ -58,8 +58,8 @@ class Aries:
         self._mcp_state: list[dict[str, Any]] = []
         self._register_mcp_providers()
         self.tools: list[BaseTool] = self.tool_registry.list_tools()
-        self.tool_definitions = [tool.to_ollama_format() for tool in self.tools]
-        self.tool_map: dict[str, BaseTool] = self.tool_registry.tools
+        self.tool_definitions = self.tool_registry.list_tool_definitions(qualified=True)
+        self.tool_map: dict[str, BaseTool] = self.tool_registry.lookup_map()
         self._token_estimator = TokenEstimator(
             mode=config.tokens.mode,
             encoding=config.tokens.encoding,
@@ -247,6 +247,21 @@ class Aries:
             self.workspace.new(workspace_cfg.default)
         self._apply_workspace_index_path()
 
+    def _resolve_tool_reference(self, name: str) -> tuple[Any, Any, str | None]:
+        """Resolve a tool name to a tool object and tool id with error messaging."""
+        try:
+            resolved = self.tool_registry.resolve_with_id(name)
+        except AmbiguousToolError as exc:
+            options = ", ".join(sorted(c.qualified for c in exc.candidates))
+            return None, None, f"Tool '{name}' is ambiguous. Try one of: {options}"
+
+        if not resolved:
+            known = ", ".join(sorted(self.tool_registry.tools))
+            return None, None, f"Unknown tool: {name}. Known tools: {known}"
+
+        tool_id, tool = resolved
+        return tool_id, tool, None
+
     def _requires_confirmation(self, tool: BaseTool) -> bool:
         """Determine whether a tool should require confirmation."""
         risk = getattr(tool, "risk_level", "read")
@@ -263,6 +278,24 @@ class Aries:
             else:
                 sanitized[key] = value
         return sanitized
+
+    def _validate_tool_arguments(self, tool: BaseTool, args: dict[str, Any]) -> dict[str, Any]:
+        """Validate tool arguments against declared schema."""
+        schema = getattr(tool, "parameters", {}) or {}
+        properties = schema.get("properties") if isinstance(schema, dict) else {}
+        allowed_keys = set(properties.keys()) if isinstance(properties, dict) else set()
+
+        unknown = [key for key in args if key not in allowed_keys]
+        if unknown:
+            allowed_display = ", ".join(sorted(allowed_keys)) if allowed_keys else "none declared"
+            raise ValueError(
+                f"Unknown argument(s) for tool '{getattr(tool, 'qualified_id', tool.name)}': "
+                f"{', '.join(sorted(unknown))}. Allowed keys: {allowed_display}"
+            )
+
+        if not allowed_keys:
+            return dict(args)
+        return {k: v for k, v in args.items() if k in allowed_keys}
 
     def _hash_output(self, text: str) -> tuple[str | None, int]:
         """Hash output content with a bounded sample."""
@@ -287,19 +320,47 @@ class Aries:
         response = (await get_user_input("Allow tool execution? [y/N]: ")).strip().lower()
         return response in {"y", "yes"}
 
-    async def _run_tool(self, tool: BaseTool, call: ToolCall) -> tuple[ToolResult, dict[str, Any]]:
+    async def _run_tool(self, tool: BaseTool, call: ToolCall, tool_id: Any | None = None) -> tuple[ToolResult, dict[str, Any]]:
         """Execute a tool through centralized policy and confirmation gates."""
-        audit = {
-            "tool_name": tool.name,
+        qualified_id = getattr(tool_id, "qualified", None) or getattr(tool, "qualified_id", None)
+        audit: dict[str, Any] = {
+            "tool_name": qualified_id or tool.name,
+            "qualified_tool_id": qualified_id or tool.name,
             "input": self._sanitize_arguments(call.arguments),
             "risk_level": getattr(tool, "risk_level", "read"),
             "mutates_state": bool(getattr(tool, "mutates_state", False)),
             "provider_id": getattr(tool, "provider_id", ""),
             "provider_version": getattr(tool, "provider_version", ""),
             "server_id": getattr(tool, "server_id", ""),
+            "transport_requires_network": getattr(tool, "transport_requires_network", False),
+            "tool_requires_network": getattr(tool, "tool_requires_network", False),
         }
 
-        decision = self.tool_policy.evaluate(tool, call.arguments, workspace=self.workspace.current.root if self.workspace.current else None)
+        try:
+            filtered_args = self._validate_tool_arguments(tool, call.arguments)
+        except ValueError as exc:
+            message = str(exc)
+            result = ToolResult(
+                success=False,
+                content="",
+                error=message,
+                metadata={"policy": "invalid_args", "duration_ms": 0},
+            )
+            audit.update(
+                {
+                    "decision": "invalid_args",
+                    "output_sha256": None,
+                    "output_size": 0,
+                    "error": message,
+                }
+            )
+            return result, audit
+
+        audit["input"] = self._sanitize_arguments(filtered_args)
+
+        decision = self.tool_policy.evaluate(
+            tool, filtered_args, workspace=self.workspace.current.root if self.workspace.current else None
+        )
         audit["policy_reason"] = decision.reason
         audit["policy_allowed"] = decision.allowed
         audit["duration_ms"] = 0
@@ -341,7 +402,7 @@ class Aries:
                 )
                 return result, audit
 
-        exec_args = dict(call.arguments)
+        exec_args = dict(filtered_args)
         exec_args.setdefault("workspace", self.workspace.current)
         exec_args.setdefault("allowed_paths", self.config.tools.allowed_paths)
         exec_args.setdefault("denied_paths", self.config.tools.denied_paths)
@@ -541,18 +602,19 @@ class Aries:
         max_display_chars = 2000
 
         for call in tool_calls:
-            tool = self.tool_map.get(call.name)
-            if tool is None:
-                display_error(f"Unknown tool requested: {call.name}")
+            tool_id, tool, error = self._resolve_tool_reference(call.name)
+            tool_label = getattr(tool_id, "qualified", None) or call.name
+            if error or tool is None:
+                display_error(error or f"Unknown tool requested: {call.name}")
                 self.conversation.add_tool_result_message(
                     tool_call_id=call.id or call.name,
-                    content=f"Unknown tool: {call.name}",
+                    content=error or f"Unknown tool: {call.name}",
                     success=False,
-                    error="Unknown tool",
-                    tool_name=call.name,
+                    error=error or "Unknown tool",
+                    tool_name=tool_label,
                 )
                 continue
-            result, audit = await self._run_tool(tool, call)
+            result, audit = await self._run_tool(tool, call, tool_id)
             result.metadata = result.metadata or {}
 
             output = result.content if result.success else (result.error or "")
@@ -562,17 +624,18 @@ class Aries:
                 content=bounded_output,
                 success=result.success,
                 error=result.error,
-                tool_name=call.name,
+                tool_name=tool_label,
             )
             self._log_transcript(
                 "tool",
                 bounded_output,
                 msg_id=str(uuid.uuid4()),
                 extra={
-                    "tool_name": call.name,
+                    "tool_name": tool_label,
                     "provider_id": getattr(tool, "provider_id", ""),
                     "provider_version": getattr(tool, "provider_version", ""),
                     "server_id": getattr(tool, "server_id", ""),
+                    "qualified_tool_id": getattr(tool, "qualified_id", tool_label),
                     "status": "success" if result.success else "fail",
                     "duration_ms": audit.get("duration_ms"),
                     "input": audit.get("input"),
@@ -583,20 +646,22 @@ class Aries:
                     "output_sha256": audit.get("output_sha256"),
                     "truncated": truncated,
                     "error": audit.get("error"),
+                    "transport_requires_network": audit.get("transport_requires_network"),
+                    "tool_requires_network": audit.get("tool_requires_network"),
                 },
             )
             self._maybe_register_artifact(result, tool)
             
             if result.success:
-                display_info(f"Tool {call.name} executed")
+                display_info(f"Tool {tool_label} executed")
             else:
-                display_error(f"Tool {call.name} failed: {result.error}")
+                display_error(f"Tool {tool_label} failed: {result.error}")
             
             if output:
                 display_output = output[:max_display_chars]
                 if len(output) > max_display_chars:
                     display_output += f"\n... (truncated, {len(output)} total chars)"
-                console.print(f"\n[dim]{call.name} output:[/dim]\n{display_output}\n")
+                console.print(f"\n[dim]{tool_label} output:[/dim]\n{display_output}\n")
     
     async def _stream_assistant_response(self, initial_response: str | None = None) -> None:
         """Stream the assistant's final response and record it."""

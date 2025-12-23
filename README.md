@@ -67,14 +67,19 @@ Core capabilities already in the codebase include:
    - `/workspace new <name>` — create a persistent workspace with transcripts and artifacts.
    - `/profile list` / `/profile use <name>` — view or apply YAML-defined behavior profiles.
    - `/policy show` — inspect workspace-aware policy settings.
-   - `/policy explain <tool> <json_args>` — dry-run a tool policy decision.
+   - `/policy explain <tool> <json_args>` — dry-run a tool policy decision (supports qualified ids like `core:write_file` or `mcp:myserver:search`).
    - `/help` — list commands.
    - `/clear` — reset conversation history.
    - `/exit` — quit.
 
 ### Tool-calling
 
-Models that support function/tool calls can invoke the registered tools. Aries loads these tools from providers via a registry; the core provider is always present, and optional MCP providers can be configured without changing policy behavior.
+Models that support function/tool calls can invoke the registered tools. Aries loads these tools from providers via a registry; the core provider is always present, and optional MCP providers can be configured without changing policy behavior. Tools have qualified identifiers to avoid collisions:
+
+- Core tools: `core:<tool_name>` (e.g., `core:read_file`, `core:write_file`)
+- MCP tools: `mcp:<server_id>:<tool_name>` (e.g., `mcp:myserver:search`)
+
+Unqualified names remain supported when unique; ambiguous names will surface an error with the qualified candidates to pick from.
 
 - `read_file`, `write_file`, `list_directory`
 - `execute_shell`
@@ -86,7 +91,8 @@ Tools declare whether they mutate state and carry a risk classification; confirm
 Policy inspection examples:
 ```bash
 /policy show
-/policy explain write_file {"path":"notes.txt","content":"hello"}
+/policy explain core:write_file {"path":"notes.txt","content":"hello"}
+/policy explain mcp:myserver:search {"query":"security news"}
 ```
 
 ## Phase 2 golden path

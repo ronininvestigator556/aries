@@ -33,6 +33,7 @@ from aries.exceptions import AriesError, ConfigError
 from aries.rag.indexer import Indexer
 from aries.rag.retriever import Retriever
 from aries.providers import CoreProvider, MCPProvider
+from aries.providers.mcp import MCPServerStatus, register_status
 from aries.tools.base import BaseTool, ToolResult
 from aries.ui.display import display_error, display_info, display_warning, display_welcome
 from aries.ui.input import get_user_input
@@ -112,7 +113,7 @@ class Aries:
 
         for server in mcp_settings.servers:
             try:
-                provider = MCPProvider(server, strict=mcp_settings.require)
+                provider = MCPProvider(server, strict=mcp_settings.require, retry=mcp_settings.retry)
             except ConfigError:
                 # Already contextualized; re-raise for startup failure
                 raise
@@ -121,33 +122,18 @@ class Aries:
                     raise ConfigError(
                         f"Failed to initialize MCP server '{server.id}': {exc}"
                     ) from exc
+                status = MCPServerStatus(server_id=server.id)
+                status.mark_error(str(exc))
+                register_status(status)
                 self._warn_once(
                     f"mcp:{server.id}",
                     f"MCP server '{server.id}' unavailable; tools will be skipped ({exc}).",
                 )
-                self._mcp_state.append(
-                    {
-                        "id": server.id,
-                        "provider_id": f"mcp:{server.id}",
-                        "provider_version": "unknown",
-                        "connected": False,
-                        "tools": 0,
-                        "reason": str(exc),
-                    }
-                )
+                self._mcp_state.append(self._status_summary(status))
                 continue
 
             self.tool_registry.register_provider(provider)
-            self._mcp_state.append(
-                {
-                    "id": server.id,
-                    "provider_id": provider.provider_id,
-                    "provider_version": provider.provider_version,
-                    "connected": provider.connected,
-                    "tools": len(provider.list_tools()),
-                    "reason": provider.failure_reason,
-                }
-            )
+            self._mcp_state.append(self._status_summary(provider.status))
 
             if not provider.connected and not mcp_settings.require:
                 reason = provider.failure_reason or "connection unavailable"
@@ -155,6 +141,21 @@ class Aries:
                     f"mcp:{server.id}:disconnected",
                     f"MCP server '{server.id}' unavailable; tools skipped ({reason}).",
                 )
+
+    def _status_summary(self, status: MCPServerStatus) -> dict[str, Any]:
+        return {
+            "id": status.server_id,
+            "provider_id": f"mcp:{status.server_id}",
+            "provider_version": getattr(status, "provider_version", "unknown"),
+            "connected": status.state == "connected",
+            "state": status.state,
+            "transport": status.transport,
+            "tools": status.tool_count,
+            "last_connect_at": status.last_connect_at,
+            "last_success_at": status.last_success_at,
+            "last_error_at": status.last_error_at,
+            "last_error": status.last_error,
+        }
 
     def _resolve_default_profile(self) -> Profile:
         """Load the default profile with legacy fallback enabled."""

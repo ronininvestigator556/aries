@@ -170,7 +170,7 @@ class AgentRun:
     plan: list[PlanStep] = field(default_factory=list)
     current_step_index: int = 0
     approvals: dict[int, ApprovalDecision] = field(default_factory=dict)  # tier -> decision
-    step_results: list[StepResult] = field(default_factory=list)
+    step_results: dict[int, StepResult] = field(default_factory=dict)  # step_index -> result
     started_at: datetime | None = None
     completed_at: datetime | None = None
     model: str = ""
@@ -187,7 +187,7 @@ class AgentRun:
             "plan": [step.to_dict() for step in self.plan],
             "current_step_index": self.current_step_index,
             "approvals": {str(k): v.to_dict() for k, v in self.approvals.items()},
-            "step_results": [result.to_dict() for result in self.step_results],
+            "step_results": [result.to_dict() for result in sorted(self.step_results.values(), key=lambda r: r.step_index)],
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "model": self.model,
@@ -217,7 +217,7 @@ class AgentRun:
             plan=[PlanStep.from_dict(s) for s in data.get("plan", [])],
             current_step_index=data.get("current_step_index", 0),
             approvals=approvals,
-            step_results=[StepResult.from_dict(r) for r in data.get("step_results", [])],
+            step_results={r.step_index: r for r in [StepResult.from_dict(r) for r in data.get("step_results", [])]},
             started_at=started_at,
             completed_at=completed_at,
             model=data.get("model", ""),
@@ -233,15 +233,16 @@ class AgentRun:
 
     def get_step_result(self, step_index: int) -> StepResult | None:
         """Get result for a specific step."""
-        for result in self.step_results:
-            if result.step_index == step_index:
-                return result
-        return None
+        return self.step_results.get(step_index)
+
+    def set_step_result(self, result: StepResult) -> None:
+        """Set result for a step."""
+        self.step_results[result.step_index] = result
 
     def is_approved_for_tier(self, tier: int) -> bool:
         """Check if a risk tier is approved for this run."""
-        if tier <= 1:
-            # Tier 0 and 1 are always allowed (may prompt once for Tier 1)
+        if tier == 0:
+            # Tier 0 is always allowed
             return True
 
         decision = self.approvals.get(tier)
@@ -250,13 +251,21 @@ class AgentRun:
 
         if decision.scope == "denied":
             return False
+
         if decision.scope == "once":
-            # "once" approvals are consumed after first use - simplified for Phase B
+            # "once" approvals are consumed after first use
             return decision.approved
+
         if decision.scope == "session":
             return decision.approved
 
         return False
+
+    def consume_once_approval(self, tier: int) -> None:
+        """Consume a 'once' approval after use."""
+        decision = self.approvals.get(tier)
+        if decision and decision.scope == "once" and decision.approved:
+            decision.scope = "denied"
 
     def duration_seconds(self) -> float | None:
         """Calculate run duration in seconds."""

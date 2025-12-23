@@ -19,6 +19,7 @@ from aries.core.cancellation import CancellationToken
 from aries.core.message import ToolCall
 from aries.core.plan_parser import parse_plan
 from aries.core.run_manager import RunManager
+from aries.core.tool_tier import effective_tier, tool_to_tier
 from aries.ui.display import display_error, display_info, display_success, display_warning
 from aries.ui.input import get_user_input
 
@@ -214,7 +215,7 @@ Example format:
                         run.status = RunStatus.AWAITING_APPROVAL
                         app.run_manager.save_run(run)
 
-                        approved = await self._request_approval(app, step.risk_tier)
+                        approved, scope = await self._request_approval(app, step.risk_tier)
                         if not approved:
                             run.status = RunStatus.STOPPED
                             break
@@ -222,7 +223,7 @@ Example format:
                         decision = ApprovalDecision(
                             tier=step.risk_tier,
                             approved=True,
-                            scope="session",  # Simplified for Phase B
+                            scope=scope,
                         )
                         run.approvals[step.risk_tier] = decision
                         run.status = RunStatus.RUNNING
@@ -230,16 +231,18 @@ Example format:
 
                 # Check tier 1 approval (workspace writes)
                 if step.risk_tier == 1:
-                    if not run.is_approved_for_tier(1):
+                    if 1 not in run.approvals:
                         # Prompt once for workspace writes
                         response = await get_user_input("Allow workspace writes for this run? [y/N]: ")
                         if response.strip().lower() in {"y", "yes"}:
                             run.approvals[1] = ApprovalDecision(tier=1, approved=True, scope="session")
-                            app.run_manager.save_run(run)
+                        else:
+                            run.approvals[1] = ApprovalDecision(tier=1, approved=False, scope="denied")
+                        app.run_manager.save_run(run)
 
                 # Execute step
-                result = await self._execute_step(app, step, run.current_step_index)
-                run.step_results.append(result)
+                result = await self._execute_step(app, step, run.current_step_index, run)
+                run.set_step_result(result)
                 app.run_manager.save_run(run)
 
                 # Update status based on result
@@ -271,7 +274,7 @@ Example format:
                 app.run_manager.save_run(run)
                 await self._finalize_run(app, run)
 
-    async def _execute_step(self, app: "Aries", step: PlanStep, step_index: int) -> StepResult:
+    async def _execute_step(self, app: "Aries", step: PlanStep, step_index: int, run: AgentRun) -> StepResult:
         """Execute a single step."""
         result = StepResult(
             step_index=step_index,
@@ -286,27 +289,12 @@ Example format:
             console.print(f"[dim]Tools: {', '.join(step.suggested_tools)}[/dim]")
 
         try:
-            # Ask LLM for next action
-            prompt = f"""You are executing step {step_index + 1} of a plan: "{step.title}"
+            # Ask LLM to execute step using tool calls
+            prompt = f"""Execute step {step_index + 1} of the plan: "{step.title}"
 
 Intent: {step.intent}
-Risk Tier: {step.risk_tier}
 
-Available tools: {', '.join([t.name for t in app.tools])}
-
-Execute this step. You can:
-1. Call tools to perform actions
-2. Produce a text summary if no tools are needed
-
-Return your response as JSON with:
-- action: "tool_call" or "text"
-- tool_id: (if action is tool_call)
-- arguments: (if action is tool_call)
-- summary: Brief description of what happened
-
-Example:
-{{"action": "tool_call", "tool_id": "read_file", "arguments": {{"path": "config.yaml"}}, "summary": "Read configuration file"}}
-"""
+Use the available tools to accomplish this step. Call the appropriate tools to perform the required actions."""
 
             messages = [
                 {"role": "system", "content": app.conversation.system_prompt or "You are a helpful assistant."},
@@ -335,11 +323,44 @@ Example:
                         result.error = error or f"Unknown tool: {call.name}"
                         break
 
+                    # Check tool-tier enforcement
+                    workspace_root = app.workspace.current.root if app.workspace.current else None
+                    tool_tier = tool_to_tier(tool, workspace_root)
+                    effective = effective_tier(step.risk_tier, tool_tier)
+
+                    # Check approval for effective tier
+                    if effective >= 2:
+                        if not run.is_approved_for_tier(effective):
+                            run.status = RunStatus.AWAITING_APPROVAL
+                            app.run_manager.save_run(run)
+
+                            approved, scope = await self._request_approval(app, effective)
+                            if not approved:
+                                result.status = StepStatus.FAILED
+                                result.error = f"Tier {effective} actions not approved"
+                                run.status = RunStatus.STOPPED
+                                break
+
+                            decision = ApprovalDecision(
+                                tier=effective,
+                                approved=True,
+                                scope=scope,
+                            )
+                            run.approvals[effective] = decision
+                            run.status = RunStatus.RUNNING
+                            app.run_manager.save_run(run)
+
+                        # Consume "once" approval after use
+                        if run.approvals.get(effective) and run.approvals[effective].scope == "once":
+                            run.consume_once_approval(effective)
+                            app.run_manager.save_run(run)
+
                     # Execute tool
                     tool_result, audit = await app._run_tool(tool, call, tool_id)
+                    args_hash = hashlib.sha256(json.dumps(call.arguments, sort_keys=True).encode()).hexdigest()[:16]
                     tool_calls_executed.append({
                         "tool_id": str(tool_id) if tool_id else call.name,
-                        "args_hash": hashlib.sha256(json.dumps(call.arguments, sort_keys=True).encode()).hexdigest()[:16],
+                        "args_hash": args_hash,
                     })
 
                     # Collect artifacts
@@ -352,6 +373,12 @@ Example:
                         result.status = StepStatus.FAILED
                         result.error = tool_result.error or "Tool execution failed"
                         break
+            else:
+                # No tool calls - step may be informational only
+                content = message_payload.get("content", "")
+                if not content.strip():
+                    result.status = StepStatus.FAILED
+                    result.error = "No tool calls or content generated"
 
             # Generate summary
             summary_prompt = f"""Summarize what happened in step "{step.title}" in 1-2 sentences.
@@ -394,8 +421,12 @@ Artifacts created: {len(artifacts_collected)}
 
         return result
 
-    async def _request_approval(self, app: "Aries", tier: int) -> bool:
-        """Request approval for a risk tier."""
+    async def _request_approval(self, app: "Aries", tier: int) -> tuple[bool, str]:
+        """Request approval for a risk tier.
+        
+        Returns:
+            Tuple of (approved: bool, scope: str).
+        """
         tier_names = {
             2: "Desktop Commander actions (desktop control)",
             3: "Playwright or networked/browser automation",
@@ -408,10 +439,10 @@ Artifacts created: {len(artifacts_collected)}
 
         response_lower = response.strip().lower()
         if response_lower in {"o", "once"}:
-            return True
+            return True, "once"
         if response_lower in {"s", "session"}:
-            return True
-        return False
+            return True, "session"
+        return False, "denied"
 
     async def _finalize_run(self, app: "Aries", run: AgentRun) -> None:
         """Finalize run and generate report."""
@@ -543,9 +574,12 @@ Artifacts created: {len(artifacts_collected)}
         )
         result.completed_at = datetime.now()
 
-        # Remove existing result if any
-        app.current_run.step_results = [r for r in app.current_run.step_results if r.step_index != step_index]
-        app.current_run.step_results.append(result)
+        app.current_run.set_step_result(result)
+        
+        # If skipping current step, advance pointer
+        if app.current_run.current_step_index == step_index:
+            app.current_run.current_step_index += 1
+        
         app.run_manager.save_run(app.current_run)
 
         display_success(f"Step {step_num} skipped.")
@@ -562,11 +596,14 @@ Artifacts created: {len(artifacts_collected)}
             return
 
         step = app.current_run.plan[step_index]
-        result = await self._execute_step(app, step, step_index)
+        result = await self._execute_step(app, step, step_index, app.current_run)
 
-        # Replace existing result
-        app.current_run.step_results = [r for r in app.current_run.step_results if r.step_index != step_index]
-        app.current_run.step_results.append(result)
+        app.current_run.set_step_result(result)
+        
+        # Set current step to retried step if run is paused
+        if app.current_run.status == RunStatus.PAUSED:
+            app.current_run.current_step_index = step_index
+        
         app.run_manager.save_run(app.current_run)
 
         display_success(f"Step {step_num} retried.")

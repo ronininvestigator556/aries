@@ -155,9 +155,11 @@ def test_approval_decisions():
         status=RunStatus.RUNNING,
     )
 
-    # Tier 0 and 1 are always allowed
+    # Tier 0 is always allowed
     assert run.is_approved_for_tier(0) is True
-    assert run.is_approved_for_tier(1) is True
+    
+    # Tier 1 requires approval (not auto-approved)
+    assert run.is_approved_for_tier(1) is False
 
     # Tier 2+ requires approval
     assert run.is_approved_for_tier(2) is False
@@ -252,7 +254,7 @@ def test_run_report_generation(tmp_path: Path):
     result.completed_at = datetime.now()
     result.duration_ms = 100
 
-    run.step_results.append(result)
+    run.set_step_result(result)
 
     markdown, json_data = manager.generate_run_report(run, artifact_dir)
 
@@ -334,7 +336,7 @@ def test_get_step_result():
         summary="Done",
     )
 
-    run.step_results.append(result)
+    run.set_step_result(result)
 
     retrieved = run.get_step_result(0)
     assert retrieved is not None

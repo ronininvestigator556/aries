@@ -64,7 +64,10 @@ class RunManager:
         try:
             data = json.loads(run_file.read_text(encoding="utf-8"))
             return AgentRun.from_dict(data)
-        except Exception:
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"Failed to load run {run_id}: {e}", exc_info=True)
             return None
 
     def list_runs(self) -> list[str]:
@@ -130,7 +133,21 @@ class RunManager:
         ])
         if run.plan:
             for step in run.plan:
-                status_marker = "✓" if any(r.step_index == step.step_index and r.status == StepStatus.COMPLETED for r in run.step_results) else "○"
+                result = run.get_step_result(step.step_index)
+                if result:
+                    status_marker = {
+                        StepStatus.COMPLETED: "✓",
+                        StepStatus.FAILED: "✗",
+                        StepStatus.SKIPPED: "⊘",
+                        StepStatus.CANCELLED: "⊘",
+                        StepStatus.PENDING: "○",
+                        StepStatus.RUNNING: "→",
+                    }.get(result.status, "○")
+                elif step.step_index == run.current_step_index:
+                    status_marker = "→"
+                else:
+                    status_marker = "○"
+                
                 md_lines.append(f"{status_marker} **Step {step.step_index + 1}**: {step.title}")
                 md_lines.append(f"  - Intent: {step.intent}")
                 md_lines.append(f"  - Risk Tier: {step.risk_tier}")

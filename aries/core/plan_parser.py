@@ -24,30 +24,69 @@ def parse_plan(llm_output: str) -> list[PlanStep]:
     Returns:
         List of PlanStep objects.
     """
-    # Try to extract JSON from the output
-    json_match = re.search(r'\{.*"plan".*\}', llm_output, re.DOTALL)
-    if json_match:
+    # Try to extract first balanced JSON object
+    json_obj = _extract_json_object(llm_output)
+    if json_obj:
         try:
-            data = json.loads(json_match.group(0))
+            data = json.loads(json_obj)
             if isinstance(data, dict) and "plan" in data:
                 steps_data = data["plan"]
                 if isinstance(steps_data, list):
-                    return _parse_json_steps(steps_data)
+                    steps = _parse_json_steps(steps_data)
+                    if steps:
+                        return steps[:12]  # Clamp to max 12 steps
         except json.JSONDecodeError:
             pass
 
     # Try to find a JSON array directly
-    array_match = re.search(r'\[.*\{.*"title".*\}.*\]', llm_output, re.DOTALL)
-    if array_match:
+    json_array = _extract_json_array(llm_output)
+    if json_array:
         try:
-            steps_data = json.loads(array_match.group(0))
+            steps_data = json.loads(json_array)
             if isinstance(steps_data, list):
-                return _parse_json_steps(steps_data)
+                steps = _parse_json_steps(steps_data)
+                if steps:
+                    return steps[:12]  # Clamp to max 12 steps
         except json.JSONDecodeError:
             pass
 
     # Fallback: parse as bullet list
-    return _parse_bullet_list(llm_output)
+    steps = _parse_bullet_list(llm_output)
+    return steps[:12] if steps else steps  # Clamp to max 12 steps
+
+
+def _extract_json_object(text: str) -> str | None:
+    """Extract first balanced JSON object from text."""
+    start = text.find('{')
+    if start == -1:
+        return None
+    
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == '{':
+            depth += 1
+        elif text[i] == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i+1]
+    return None
+
+
+def _extract_json_array(text: str) -> str | None:
+    """Extract first balanced JSON array from text."""
+    start = text.find('[')
+    if start == -1:
+        return None
+    
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == '[':
+            depth += 1
+        elif text[i] == ']':
+            depth -= 1
+            if depth == 0:
+                return text[start:i+1]
+    return None
 
 
 def _parse_json_steps(steps_data: list[dict[str, Any]]) -> list[PlanStep]:

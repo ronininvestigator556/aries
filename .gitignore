@@ -1,0 +1,35 @@
+# Profiles directory - contains user-specific profiles
+profiles/
+
+# Workspaces - user-specific workspace data
+workspaces/
+
+# Indices - RAG index data
+indices/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Aries specific
+.aries/
+*.egg-info/
+

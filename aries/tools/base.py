@@ -32,6 +32,8 @@ class BaseTool(ABC):
     tool_requires_network: bool = False
     requires_shell: bool = False
     path_params: tuple[str, ...] = ()
+    path_params_optional: bool = False
+    uses_filesystem_paths: bool = False
     
     @property
     @abstractmethod

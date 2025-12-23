@@ -21,6 +21,7 @@ class ReadFileTool(BaseTool):
     description = "Read the contents of a file at the specified path"
     risk_level = "read"
     path_params = ("path",)
+    uses_filesystem_paths = True
     
     @property
     def parameters(self) -> dict[str, Any]:
@@ -98,6 +99,7 @@ class WriteFileTool(BaseTool):
     emits_artifacts = True
     risk_level = "write"
     path_params = ("path",)
+    uses_filesystem_paths = True
     
     @property
     def parameters(self) -> dict[str, Any]:
@@ -185,6 +187,7 @@ class ListDirectoryTool(BaseTool):
     description = "List files and directories at the specified path"
     risk_level = "read"
     path_params = ("path",)
+    uses_filesystem_paths = True
     
     @property
     def parameters(self) -> dict[str, Any]:

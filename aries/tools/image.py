@@ -19,6 +19,7 @@ class ReadImageTool(BaseTool):
     description = "Load an image file from disk and return a base64-encoded string"
     risk_level = "read"
     path_params = ("path",)
+    uses_filesystem_paths = True
     
     @property
     def parameters(self) -> dict[str, Any]:

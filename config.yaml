@@ -55,6 +55,21 @@ tools:
   allow_network: false
   confirmation_required: true
 
+# Provider settings
+providers:
+  strict_metadata: false
+  strict_metadata_max_issues: 25
+  mcp:
+    enabled: false
+    require: false
+    servers: []
+
+# Policy display settings
+policy:
+  show_verbose: false
+  inventory_max_issues: 10
+  inventory_verbose_limit: 200
+
 # Conversation context settings
 conversation:
   max_context_tokens: 4096

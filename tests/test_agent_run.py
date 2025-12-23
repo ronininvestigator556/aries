@@ -212,6 +212,11 @@ def test_run_manager_persistence(tmp_path: Path):
     )
     run.started_at = datetime.now()
 
+    # Ensure the runs directory is recreated if missing
+    assert runs_dir.exists()
+    runs_dir.rmdir()
+    assert not runs_dir.exists()
+
     manager.save_run(run)
     assert (runs_dir / "test_persistence.json").exists()
 
@@ -343,4 +348,3 @@ def test_get_step_result():
     assert retrieved.summary == "Done"
 
     assert run.get_step_result(999) is None
-

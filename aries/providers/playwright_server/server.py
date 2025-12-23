@@ -94,6 +94,9 @@ TOOLS = [
 ]
 
 def _get_stub_state_path() -> Path:
+    override = os.environ.get("ARIES_PLAYWRIGHT_STUB_STATE_PATH")
+    if override:
+        return Path(override)
     return Path(tempfile.gettempdir()) / STUB_STATE_FILE
 
 def _load_stub_state() -> Dict[str, Any]:
@@ -114,7 +117,10 @@ def handle_list_tools():
 
 def handle_invoke(tool_name: str, args_json: str):
     try:
-        args = json.loads(args_json).get("arguments", {})
+        args = json.loads(args_json)
+        if not isinstance(args, dict):
+            print(json.dumps({"success": False, "error": "Arguments must be a JSON object"}))
+            return
     except json.JSONDecodeError:
         print(json.dumps({"success": False, "error": "Invalid JSON arguments"}))
         return

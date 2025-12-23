@@ -13,11 +13,16 @@ from aries.providers.mcp import MCPProvider
 SERVER_SCRIPT = Path("aries/providers/playwright_server/server.py").absolute()
 
 @pytest.fixture
-def stub_env():
+def stub_env(tmp_path):
     """Set up environment for stub mode."""
+    state_file = tmp_path / "stub_state.json"
     os.environ["ARIES_PLAYWRIGHT_STUB"] = "1"
+    os.environ["ARIES_PLAYWRIGHT_STUB_STATE_PATH"] = str(state_file)
     yield
-    del os.environ["ARIES_PLAYWRIGHT_STUB"]
+    if "ARIES_PLAYWRIGHT_STUB" in os.environ:
+        del os.environ["ARIES_PLAYWRIGHT_STUB"]
+    if "ARIES_PLAYWRIGHT_STUB_STATE_PATH" in os.environ:
+        del os.environ["ARIES_PLAYWRIGHT_STUB_STATE_PATH"]
 
 @pytest.fixture
 def workspace_manager(tmp_path):
@@ -33,6 +38,10 @@ def mcp_provider(stub_env):
     config = MCPServerConfig(
         id="playwright",
         command=[sys.executable, str(SERVER_SCRIPT)],
+        # config.env is merged on top of os.environ, so we don't strictly need to duplicate here
+        # if stub_env sets it, but keeping it explicit for the test logic if needed.
+        # However, to test inheritance, let's rely on os.environ for stub mode 
+        # but passing it here ensures it's in the client's view if logic changes.
         env={"ARIES_PLAYWRIGHT_STUB": "1"}
     )
     provider = MCPProvider(config, strict=True)
@@ -83,7 +92,11 @@ async def test_full_workflow(mcp_provider, workspace_manager):
     # Path must be absolute for the stub to write to it
     screenshot_path = workspace.root / "shot.png"
     
-    res3 = await tools["page_screenshot"].execute(context_id=cid, path=str(screenshot_path))
+    res3 = await tools["page_screenshot"].execute(
+        context_id=cid, 
+        path=str(screenshot_path),
+        workspace=workspace
+    )
     assert res3.success
     assert res3.artifacts
     assert len(res3.artifacts) == 1
@@ -100,5 +113,35 @@ async def test_full_workflow(mcp_provider, workspace_manager):
     assert record
     assert record["path"] == str(screenshot_path)
     assert record["mime_type"] == "image/png"
+
+@pytest.mark.asyncio
+async def test_path_safety_enforcement(mcp_provider, workspace_manager, tmp_path):
+    """Verify that paths outside the workspace are rejected by the client."""
+    tools = {t.name: t for t in mcp_provider.list_tools()}
+    workspace = workspace_manager.current
+    
+    # Create context
+    res1 = await tools["browser_new_context"].execute()
+    cid = res1.metadata.get("context_id")
+    
+    # Try to write screenshot outside workspace (using a separate temp dir)
+    # tmp_path is the root for workspace_manager but we can use a sibling or parent
+    unsafe_dir = tmp_path / "unsafe"
+    unsafe_dir.mkdir()
+    unsafe_path = unsafe_dir / "out.png"
+    
+    res = await tools["page_screenshot"].execute(
+        context_id=cid, 
+        path=str(unsafe_path),
+        workspace=workspace
+    )
+    
+    assert not res.success
+    error_msg = res.error or ""
+    assert (
+        "escapes workspace" in error_msg 
+        or "denied by policy" in error_msg
+        or "Path outside allowed locations" in error_msg
+    )
 
 

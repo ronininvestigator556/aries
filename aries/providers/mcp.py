@@ -6,6 +6,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from aries.config import MCPRetryConfig, MCPServerConfig
+from aries.core.workspace import FileToolError, resolve_and_validate_path
 from aries.exceptions import ConfigError
 from aries.providers.base import Provider
 from aries.tools.base import BaseTool, ToolResult
@@ -149,7 +151,9 @@ class CommandMCPClient:
             raise MCPClientError("Command MCP client requires a command")
         self.server_id = config.id
         self.command = list(config.command)
-        self.env = config.env
+        self.env = os.environ.copy()
+        if config.env:
+            self.env.update(config.env)
         self.timeout = config.timeout_seconds
 
     def connect(self) -> None:
@@ -190,8 +194,7 @@ class CommandMCPClient:
         return tools, version
 
     def invoke(self, tool_name: str, arguments: dict[str, Any]) -> MCPToolCallResult:
-        payload = {"tool": tool_name, "arguments": arguments}
-        output = self._run(self.command + ["--invoke", tool_name, "--args", json.dumps(payload)])
+        output = self._run(self.command + ["--invoke", tool_name, "--args", json.dumps(arguments)])
         try:
             parsed = json.loads(output)
         except json.JSONDecodeError as exc:
@@ -290,6 +293,28 @@ class MCPTool(BaseTool):
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         arguments = self._prepare_arguments(kwargs)
+
+        # Validate path parameters against workspace policy
+        if self.path_params:
+            workspace = kwargs.get("workspace")
+            allowed_paths = kwargs.get("allowed_paths")
+            denied_paths = kwargs.get("denied_paths")
+
+            for param in self.path_params:
+                if param in arguments:
+                    val = arguments[param]
+                    if isinstance(val, (str, os.PathLike)):
+                        try:
+                            resolved = resolve_and_validate_path(
+                                val,
+                                workspace=workspace,
+                                allowed_paths=allowed_paths,
+                                denied_paths=denied_paths,
+                            )
+                            arguments[param] = str(resolved)
+                        except FileToolError as exc:
+                            return ToolResult(success=False, content="", error=str(exc))
+
         try:
             result = await asyncio.to_thread(self._client.invoke, self.name, arguments)
         except Exception as exc:

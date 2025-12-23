@@ -100,6 +100,10 @@ class Aries:
         self.next_input_default: str = ""
         self.processing_task: asyncio.Task | None = None
 
+        # Phase B: Agent Runs
+        self.current_run = None
+        self.run_manager = None
+
     def _get_status_bar(self) -> Any:
         """Generate status bar content."""
         from prompt_toolkit.formatted_text import HTML
@@ -111,8 +115,19 @@ class Aries:
         status = self.last_action_status
         last_action = self.last_action_summary
         
+        # Add run status if active
+        run_status = ""
+        if self.current_run:
+            from aries.core.agent_run import RunStatus
+            if self.current_run.status in (
+                RunStatus.RUNNING, RunStatus.PLANNING, RunStatus.PAUSED, RunStatus.AWAITING_APPROVAL
+            ):
+                run_status = f" | <b>Run:</b> {self.current_run.status.value}"
+                if self.current_run.current_step_index < len(self.current_run.plan):
+                    run_status += f" (Step {self.current_run.current_step_index + 1}/{len(self.current_run.plan)})"
+        
         return HTML(
-            f" <b>WS:</b> {ws} | <b>Model:</b> {model} | <b>Profile:</b> {profile} | <b>{rag}</b> | {status} | <i>{last_action}</i>"
+            f" <b>WS:</b> {ws} | <b>Model:</b> {model} | <b>Profile:</b> {profile} | <b>{rag}</b> | {status} | <i>{last_action}</i>{run_status}"
         )
 
     def _warn_once(self, key: str, message: str) -> None:
@@ -513,6 +528,16 @@ class Aries:
                     self.last_action_status = "Idle"
                 
             except KeyboardInterrupt:
+                # Cancel active run if any
+                if self.current_run and self.current_run.cancellation_token:
+                    self.current_run.cancellation_token.cancel()
+                    from aries.core.agent_run import RunStatus
+                    if self.current_run.status in (RunStatus.RUNNING, RunStatus.PLANNING):
+                        self.current_run.status = RunStatus.CANCELLED
+                        if self.run_manager:
+                            self.run_manager.save_run(self.current_run)
+                        console.print("\n[yellow]Run cancelled.[/yellow]")
+                
                 if self.processing_task and not self.processing_task.done():
                     console.print("\n[yellow]Cancelling...[/yellow]")
                     self.processing_task.cancel()

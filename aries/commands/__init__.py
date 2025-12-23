@@ -17,6 +17,7 @@ from aries.commands.palette import PaletteCommand
 from aries.commands.last import LastCommand
 from aries.commands.artifacts import ArtifactsCommand
 from aries.commands.cancel import CancelCommand
+from aries.commands.run import RunCommand
 
 # Command registry. The help command is resolved lazily to avoid circular import.
 COMMANDS: dict[str, type[BaseCommand] | None] = {
@@ -34,6 +35,7 @@ COMMANDS: dict[str, type[BaseCommand] | None] = {
     "last": LastCommand,
     "artifacts": ArtifactsCommand,
     "cancel": CancelCommand,
+    "run": RunCommand,
 }
 
 

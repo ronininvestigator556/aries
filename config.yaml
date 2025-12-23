@@ -4,7 +4,7 @@
 # Ollama settings
 ollama:
   host: "http://localhost:11434"
-  default_model: "llama3.2"
+  default_model: "huihui_ai/qwen3-abliterated:4b"
   embedding_model: "nomic-embed-text"
   timeout: 120
 

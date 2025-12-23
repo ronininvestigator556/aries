@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.markup import escape
@@ -15,6 +16,7 @@ from rich.markup import escape
 from aries.commands.base import BaseCommand
 from aries.core.tool_policy import PolicyDecision
 from aries.core.tool_registry import AmbiguousToolError
+from aries.core.tool_validation import ToolValidationResult, validate_tools
 from aries.core.workspace import resolve_and_validate_path
 from aries.ui.display import console, display_error
 
@@ -33,8 +35,10 @@ class PolicyCommand(BaseCommand):
 
     async def execute(self, app: "Aries", args: str) -> None:
         args = args.strip()
+        parts = args.split()
+        verbose_flag = "--verbose" in parts
         if args.startswith("show") or not args:
-            self._show_policy(app)
+            self._show_policy(app, verbose=verbose_flag)
             return
 
         if args.startswith("explain"):
@@ -70,7 +74,7 @@ class PolicyCommand(BaseCommand):
             "Example: /policy explain write_file {\"path\":\"notes.txt\",\"content\":\"hello\"}\n"
         )
 
-    def _show_policy(self, app: "Aries") -> None:
+    def _show_policy(self, app: "Aries", *, verbose: bool = False) -> None:
         workspace = app.workspace.current
         workspace_label = "none"
         if workspace:
@@ -137,6 +141,20 @@ class PolicyCommand(BaseCommand):
             table.add_row("Tool denylist:", ", ".join(denylist))
 
         console.print(Panel(table, title="Policy status", border_style="cyan"))
+        validation = getattr(app, "tool_validation", None)
+        if validation is None:
+            strict_setting = bool(
+                getattr(getattr(app.config, "providers", object()), "strict_metadata", False)
+            )
+            validation = validate_tools(app.tool_registry, strict=strict_setting)
+        app.tool_validation = validation
+        self._render_inventory(
+            app,
+            validation,
+            tools_by_provider=provider_lines,
+            tools_by_server=server_lines,
+            verbose=verbose or getattr(getattr(app.config, "policy", object()), "show_verbose", False),
+        )
 
     def _collect_allowed_roots(self, app: "Aries") -> list[str]:
         roots: list[Path] = []
@@ -153,6 +171,68 @@ class PolicyCommand(BaseCommand):
             seen.add(resolved)
             ordered.append(resolved)
         return ordered
+
+    def _render_inventory(
+        self,
+        app: "Aries",
+        validation: ToolValidationResult,
+        *,
+        tools_by_provider: list[str],
+        tools_by_server: list[str],
+        verbose: bool,
+    ) -> None:
+        issues = validation.all_issues
+        warn_count = sum(1 for issue in issues if issue.severity == "WARN")
+        error_count = sum(1 for issue in issues if issue.severity == "ERROR")
+        tools_with_issues = {issue.qualified_tool_id for issue in issues}
+
+        policy_cfg = getattr(app.config, "policy", None)
+        top_n = getattr(policy_cfg, "inventory_max_issues", 10) or 10
+        verbose_limit = getattr(policy_cfg, "inventory_verbose_limit", 200) or 200
+        display_limit = verbose_limit if verbose else top_n
+
+        summary = Table.grid(padding=(0, 1))
+        summary.add_row("Total tools:", str(len(app.tool_registry.list_tools())))
+        if tools_by_provider:
+            summary.add_row("Providers:", "; ".join(tools_by_provider))
+        if tools_by_server:
+            summary.add_row("Servers:", "; ".join(tools_by_server))
+        summary.add_row(
+            "Tools with issues:",
+            f"{len(tools_with_issues)} (warn={warn_count}, error={error_count})",
+        )
+
+        content: list[Any] = [summary]
+        if issues:
+            sorted_issues = sorted(
+                issues,
+                key=lambda issue: (
+                    0 if issue.severity == "ERROR" else 1,
+                    issue.issue_code,
+                    issue.qualified_tool_id,
+                ),
+            )
+            displayed = sorted_issues[:display_limit]
+            issue_table = Table(box=None, padding=(0, 1))
+            issue_table.add_column("Severity", style="bold")
+            issue_table.add_column("Tool")
+            issue_table.add_column("Issue")
+            for issue in displayed:
+                issue_table.add_row(
+                    issue.severity,
+                    escape(issue.qualified_tool_id),
+                    f"{issue.issue_code}: {issue.message}",
+                )
+            content.append(issue_table)
+            if len(sorted_issues) > display_limit:
+                content.append(
+                    f"[dim]Showing first {display_limit} of {len(sorted_issues)} issues. "
+                    "Use --verbose or policy.show_verbose to expand.[/dim]"
+                )
+        else:
+            content.append("[dim]No metadata issues detected.[/dim]")
+
+        console.print(Panel(Group(*content), title="Inventory", border_style="cyan"))
 
     async def _explain(self, app: "Aries", tool_name: str, args: dict[str, Any]) -> None:
         try:

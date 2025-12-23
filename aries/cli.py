@@ -28,6 +28,7 @@ from aries.core.tool_registry import AmbiguousToolError, ToolRegistry
 from aries.core.profile import Profile, ProfileManager
 from aries.core.workspace import ArtifactRef, TranscriptEntry, WorkspaceManager
 from aries.exceptions import FileToolError
+from aries.core.tool_validation import validate_tools
 from aries.core.tokenizer import TokenEstimator
 from aries.exceptions import AriesError, ConfigError
 from aries.rag.indexer import Indexer
@@ -58,6 +59,10 @@ class Aries:
         self.tool_registry.register_provider(CoreProvider())
         self._mcp_state: list[dict[str, Any]] = []
         self._register_mcp_providers()
+        strict_metadata = bool(getattr(config.providers, "strict_metadata", False))
+        self.tool_validation = validate_tools(self.tool_registry, strict=strict_metadata)
+        if strict_metadata and self.tool_validation.errors:
+            self._raise_strict_metadata_error(config.providers.strict_metadata_max_issues)
         self.tools: list[BaseTool] = self.tool_registry.list_tools()
         self.tool_definitions = self.tool_registry.list_tool_definitions(qualified=True)
         self.tool_map: dict[str, BaseTool] = self.tool_registry.lookup_map()
@@ -156,6 +161,20 @@ class Aries:
             "last_error_at": status.last_error_at,
             "last_error": status.last_error,
         }
+
+    def _raise_strict_metadata_error(self, max_issues: int) -> None:
+        limit = max(1, max_issues or 25)
+        preview = self.tool_validation.errors[:limit]
+        details = "; ".join(f"{issue.qualified_tool_id}:{issue.issue_code}" for issue in preview)
+        remaining = len(self.tool_validation.errors) - limit
+        if remaining > 0:
+            details += f"; ... {remaining} more"
+        raise ConfigError(
+            "Strict tool metadata enforcement failed: "
+            f"{len(self.tool_validation.errors)} issue(s) detected "
+            f"({details}). Resolve metadata and restart, or run /policy show --verbose to inspect. "
+            "Disable providers.strict_metadata to bypass enforcement."
+        )
 
     def _resolve_default_profile(self) -> Profile:
         """Load the default profile with legacy fallback enabled."""
@@ -265,7 +284,7 @@ class Aries:
 
     def _requires_confirmation(self, tool: BaseTool) -> bool:
         """Determine whether a tool should require confirmation."""
-        risk = getattr(tool, "risk_level", "read")
+        risk = str(getattr(tool, "risk_level", "read")).lower()
         if getattr(tool, "mutates_state", False):
             return True
         return risk in {"write", "exec"}

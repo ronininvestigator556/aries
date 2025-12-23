@@ -7,6 +7,9 @@ import pytest
 from aries.cli import Aries
 from aries.commands.policy import PolicyCommand
 from aries.config import Config
+from aries.exceptions import ConfigError
+from aries.providers.core import CoreProvider
+from aries.tools.base import BaseTool, ToolResult
 
 
 def _make_config(tmp_path: Path) -> Config:
@@ -20,6 +23,33 @@ def _make_config(tmp_path: Path) -> Config:
     config.profiles.directory.mkdir(parents=True, exist_ok=True)
     (config.profiles.directory / "default.yaml").write_text("name: default\nsystem_prompt: base", encoding="utf-8")
     return config
+
+
+class _MissingMetadataTool(BaseTool):
+    name = "incomplete_tool"
+    description = "tool missing required metadata"
+    risk_level = ""
+    provider_id = "core"
+    provider_version = "test"
+
+    @property
+    def parameters(self) -> dict[str, object]:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs: object) -> ToolResult:
+        return ToolResult(success=False, content="")
+
+
+def _with_incomplete_tool(monkeypatch: pytest.MonkeyPatch) -> _MissingMetadataTool:
+    tool = _MissingMetadataTool()
+    original = CoreProvider.list_tools
+
+    def _patched(self: CoreProvider) -> list[BaseTool]:
+        tools = original(self)
+        return [*tools, tool]
+
+    monkeypatch.setattr(CoreProvider, "list_tools", _patched)
+    return tool
 
 
 @pytest.mark.anyio
@@ -120,3 +150,36 @@ async def test_policy_explain_shows_network_semantics(tmp_path: Path, capsys: py
     assert "transport=False" in output
     assert "tool=True" in output
     assert "effective=True" in output
+
+
+@pytest.mark.anyio
+async def test_policy_show_reports_inventory_issues(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _with_incomplete_tool(monkeypatch)
+    config = _make_config(tmp_path)
+    app = Aries(config)
+    command = PolicyCommand()
+
+    await command.execute(app, "show")
+
+    output = capsys.readouterr().out
+    assert "Inventory" in output
+    assert "MISSING_RISK_LEVEL" in output
+    assert "incomplete_tool" in output
+
+
+def test_strict_metadata_blocks_missing_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_incomplete_tool(monkeypatch)
+    config = _make_config(tmp_path)
+    config.providers.strict_metadata = True
+
+    with pytest.raises(ConfigError) as excinfo:
+        Aries(config)
+
+    assert "Strict tool metadata enforcement failed" in str(excinfo.value)
+    assert "incomplete_tool:MISSING_RISK_LEVEL" in str(excinfo.value)

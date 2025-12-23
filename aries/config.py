@@ -102,6 +102,13 @@ class ToolsConfig(BaseModel):
         default=True, description="Whether dangerous tools require confirmation"
     )
 
+class PolicyDisplayConfig(BaseModel):
+    """Policy display settings."""
+
+    show_verbose: bool = False
+    inventory_max_issues: int = Field(default=10, ge=1, le=200)
+    inventory_verbose_limit: int = Field(default=200, ge=10, le=500)
+
 
 class MCPServerConfig(BaseModel):
     """Configuration for a single MCP server."""
@@ -173,6 +180,8 @@ class ProvidersConfig(BaseModel):
     """Container for optional tool providers."""
 
     mcp: MCPProvidersConfig = Field(default_factory=MCPProvidersConfig)
+    strict_metadata: bool = False
+    strict_metadata_max_issues: int = Field(default=25, ge=1, le=500)
 
 
 class ConversationConfig(BaseModel):
@@ -205,6 +214,7 @@ class Config(BaseModel):
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
     tokens: TokensConfig = Field(default_factory=TokensConfig)
+    policy: PolicyDisplayConfig = Field(default_factory=PolicyDisplayConfig)
 
     @classmethod
     def load(cls, path: Path | str) -> "Config":

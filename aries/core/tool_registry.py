@@ -134,6 +134,10 @@ class ToolRegistry:
             grouped[provider_id].append(tool)
         return grouped
 
+    def items(self) -> list[tuple[ToolId, BaseTool]]:
+        """Return tool id/tool pairs for inspection."""
+        return list(self._tools.items())
+
     def _make_tool_id(self, provider: Provider, tool: BaseTool) -> ToolId:
         """Build a ToolId from provider and tool metadata."""
         provider_id = provider.provider_id.split(":", 1)[0]

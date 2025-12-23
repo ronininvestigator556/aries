@@ -94,6 +94,7 @@ Policy inspection examples:
 /policy explain core:write_file {"path":"notes.txt","content":"hello"}
 /policy explain mcp:myserver:search {"query":"security news"}
 ```
+/policy show now includes an Inventory summary that reports total tools, provider/server counts, and the top metadata gaps (missing `risk_level`, `emits_artifacts`, `path_params`, or network flags). Use `/policy show --verbose` or `policy.show_verbose=true` to list all detected issues when auditing providers.
 
 ### MCP server health
 
@@ -125,9 +126,11 @@ Key sections in `config.yaml`:
 - `tools`: shell timeout, max file size, allowed extensions, path allow/deny lists, `allow_shell`, `allow_network`, and `confirmation_required` for mutating tools.
 - `workspace`: persistence root, default workspace, and directory names for transcripts/artifacts/indexes (artifact manifests live under `artifacts/manifest.json`).
 - `profiles`: profile directory, default profile name, and `require` to disable legacy prompt fallback in production.
-- `providers.mcp`: optional Model Context Protocol servers. MCP tools appear in `/policy show`/`/policy explain` and use the same ToolPolicy and confirmation gates as built-in tools. Minimal example:
+- `providers`: strict metadata enforcement plus optional Model Context Protocol servers. Set `providers.strict_metadata=true` (bounded by `providers.strict_metadata_max_issues`) to fail startup when provider tools omit required metadata. MCP tools appear in `/policy show`/`/policy explain` and use the same ToolPolicy and confirmation gates as built-in tools. Minimal example:
   ```yaml
   providers:
+    strict_metadata: false
+    strict_metadata_max_issues: 25
     mcp:
       enabled: true
       require: false
@@ -140,6 +143,7 @@ Key sections in `config.yaml`:
           # or: command: ["python", "-m", "your_mcp_server"]
           timeout_seconds: 10
   ```
+- `policy`: inventory reporting verbosity controls (`policy.show_verbose`, `policy.inventory_max_issues`, `policy.inventory_verbose_limit`).
 - `tokens`: token counting mode (`approx` by default for offline safety, `tiktoken` with a warning-and-fallback, or `disabled`), plus encoding and character-per-token heuristic.
 - `conversation`: max context tokens and message count for pruning.
 - `prompts`: directory and default prompt name (legacy fallback; Aries will migrate `prompts.default` to `profiles.default` with a warning).
@@ -151,6 +155,12 @@ from aries.config import get_default_config_yaml
 print(get_default_config_yaml())
 PY
 ```
+
+### Tool metadata quality & strict mode
+
+- Each tool should declare `risk_level` (`READ`/`WRITE`/`EXEC`), `emits_artifacts`, and network flags (`transport_requires_network` + `tool_requires_network` or `requires_network`).
+- Filesystem tools—or WRITE/EXEC tools with path-like schema fields—must declare `path_params`. MCP tools with loose schemas are surfaced as warnings (unknown schemas) until clarified.
+- Enable `providers.strict_metadata=true` in production to block unknown-risk tools; `/policy show --verbose` lists the exact issues to resolve. Adjust `policy.show_verbose`, `policy.inventory_max_issues`, or `policy.inventory_verbose_limit` to tune inventory reporting.
 
 ## Testing
 

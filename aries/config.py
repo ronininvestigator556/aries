@@ -102,6 +102,39 @@ class ToolsConfig(BaseModel):
         default=True, description="Whether dangerous tools require confirmation"
     )
 
+
+class DesktopOpsProcessPollConfig(BaseModel):
+    """Polling settings for Desktop Ops long-running processes."""
+
+    initial_ms: int = Field(default=250, ge=50, le=5000)
+    max_ms: int = Field(default=2000, ge=100, le=10000)
+    max_idle_seconds: int = Field(default=30, ge=5, le=600)
+    max_total_seconds: int = Field(default=900, ge=30, le=3600)
+
+
+class DesktopOpsConfig(BaseModel):
+    """Desktop Ops execution settings."""
+
+    enabled: bool = False
+    mode: str = Field(default="guide", description="guide | commander | strict")
+    server_id: str = Field(default="desktop_commander", description="MCP server id for Desktop Commander")
+    allowed_roots: list[Path] = Field(default_factory=lambda: [Path(".")])
+    auto_exec_allowlist: list[str] = Field(default_factory=list)
+    require_approval_for: list[str] = Field(
+        default_factory=lambda: ["WRITE_DESTRUCTIVE", "EXEC_PRIVILEGED", "NETWORK"]
+    )
+    max_steps: int = Field(default=40, ge=1, le=200)
+    max_retries_per_step: int = Field(default=2, ge=0, le=5)
+    process_poll: DesktopOpsProcessPollConfig = Field(default_factory=DesktopOpsProcessPollConfig)
+
+    @field_validator("mode")
+    @classmethod
+    def _normalize_mode(cls, value: str) -> str:
+        normalized = (value or "guide").strip().lower()
+        if normalized not in {"guide", "commander", "strict"}:
+            return "guide"
+        return normalized
+
 class PolicyDisplayConfig(BaseModel):
     """Policy display settings."""
 
@@ -210,6 +243,7 @@ class Config(BaseModel):
     rag: RAGConfig = Field(default_factory=RAGConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    desktop_ops: DesktopOpsConfig = Field(default_factory=DesktopOpsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)

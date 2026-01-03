@@ -29,13 +29,20 @@ def tool_to_tier(tool: BaseTool, workspace_root: Any = None) -> int:
     requires_shell = getattr(tool, "requires_shell", False)
     mutates_state = getattr(tool, "mutates_state", False)
     provider_id = getattr(tool, "provider_id", "")
+    provider_key = getattr(tool, "provider_key", "")
+    server_id = getattr(tool, "server_id", "")
 
     # Tier 3: Network/browser automation
     if requires_network or provider_id in ("mcp_playwright", "playwright"):
         return 3
 
     # Tier 2: Desktop control, shell execution, or non-workspace writes
-    if requires_shell or provider_id in ("mcp_desktop_commander", "desktop_commander"):
+    if (
+        requires_shell
+        or provider_id in ("mcp_desktop_commander", "desktop_commander")
+        or provider_key.startswith("mcp:desktop")
+        or server_id in ("desktop_commander", "desktop")
+    ):
         return 2
 
     # Tier 1: Local writes (workspace-scoped)
@@ -73,4 +80,3 @@ def effective_tier(step_tier: int, tool_tier: int) -> int:
         Effective tier (max of both).
     """
     return max(step_tier, tool_tier)
-

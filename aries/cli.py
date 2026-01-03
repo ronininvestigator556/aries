@@ -68,7 +68,8 @@ from aries.exceptions import FileToolError
 from aries.core.tool_validation import validate_tools
 from aries.core.tokenizer import TokenEstimator
 from aries.exceptions import AriesError, ConfigError
-from aries.providers import CoreProvider, MCPProvider
+from aries.providers import CoreProvider, MCPProvider, DesktopCommanderProvider
+from aries.providers.desktop_commander import select_desktop_commander_server
 from aries.providers.mcp import MCPServerStatus, register_status
 from aries.tools.base import BaseTool, ToolResult
 from aries.ui.display import display_error, display_info, display_warning, display_welcome
@@ -104,6 +105,7 @@ class Aries:
         self.tool_registry.register_provider(CoreProvider())
         self._mcp_state: list[dict[str, Any]] = []
         self._register_mcp_providers()
+        self._register_desktop_commander_provider()
         strict_metadata = bool(getattr(config.providers, "strict_metadata", False))
         self.tool_validation = validate_tools(self.tool_registry, strict=strict_metadata)
         if strict_metadata and self.tool_validation.errors:
@@ -126,6 +128,7 @@ class Aries:
         self.running = True
         self.current_model: str = config.ollama.default_model
         self.current_rag: str | None = None
+        self.desktop_ops_mode: str = getattr(config.desktop_ops, "mode", "guide")
         self.conversation_id = str(uuid.uuid4())
         self._rag_retrieval_attempted: bool = False
 
@@ -162,6 +165,9 @@ class Aries:
         rag = f"RAG:{self.current_rag}" if self.current_rag else "RAG:off"
         status = self.last_action_status
         last_action = self.last_action_summary
+        desktop_mode = ""
+        if getattr(self.config, "desktop_ops", None) and self.config.desktop_ops.enabled:
+            desktop_mode = f" | <b>DesktopOps:</b> {self.desktop_ops_mode}"
         
         # Add run status if active
         run_status = ""
@@ -176,7 +182,7 @@ class Aries:
                     run_status += f" (Step {self.current_run.current_step_index + 1}/{len(self.current_run.plan)})"
         
         return HTML(
-            f" <b>WS:</b> {ws} | <b>Model:</b> {model} | <b>Profile:</b> {profile} | <b>{rag}</b> | {status} | <i>{last_action}</i>{run_status}"
+            f" <b>WS:</b> {ws} | <b>Model:</b> {model} | <b>Profile:</b> {profile} | <b>{rag}</b> | {status} | <i>{last_action}</i>{run_status}{desktop_mode}"
         )
 
     def _warn_once(self, key: str, message: str) -> None:
@@ -233,6 +239,9 @@ class Aries:
             return
 
         for server in mcp_settings.servers:
+            desktop_cfg = getattr(self.config, "desktop_ops", None)
+            if desktop_cfg and desktop_cfg.enabled and server.id == desktop_cfg.server_id:
+                continue
             try:
                 provider = MCPProvider(server, strict=mcp_settings.require, retry=mcp_settings.retry)
             except ConfigError:
@@ -262,6 +271,34 @@ class Aries:
                     f"mcp:{server.id}:disconnected",
                     f"MCP server '{server.id}' unavailable; tools skipped ({reason}).",
                 )
+
+    def _register_desktop_commander_provider(self) -> None:
+        desktop_cfg = getattr(self.config, "desktop_ops", None)
+        if not desktop_cfg or not desktop_cfg.enabled:
+            return
+        providers_cfg = getattr(self.config, "providers", None)
+        mcp_cfg = getattr(providers_cfg, "mcp", None) if providers_cfg else None
+        servers = mcp_cfg.servers if mcp_cfg else []
+        server = select_desktop_commander_server(servers, desktop_cfg.server_id)
+        if not server:
+            self._warn_once(
+                "desktop_ops:no_server",
+                f"Desktop Ops enabled but MCP server '{desktop_cfg.server_id}' not configured.",
+            )
+            return
+        try:
+            provider = DesktopCommanderProvider(
+                server,
+                retry=mcp_cfg.retry if mcp_cfg else None,
+                strict=bool(getattr(providers_cfg, "strict_metadata", False)),
+            )
+        except Exception as exc:
+            self._warn_once(
+                f"desktop_ops:{server.id}",
+                f"Desktop Commander MCP server '{server.id}' unavailable; tools skipped ({exc}).",
+            )
+            return
+        self.tool_registry.register_provider(provider)
 
     def _status_summary(self, status: MCPServerStatus) -> dict[str, Any]:
         return {
@@ -623,7 +660,15 @@ class Aries:
         response = (await get_user_input("Allow tool execution? [y/N]: ")).strip().lower()
         return response in {"y", "yes"}
 
-    async def _run_tool(self, tool: BaseTool, call: ToolCall, tool_id: Any | None = None) -> tuple[ToolResult, dict[str, Any]]:
+    async def _run_tool(
+        self,
+        tool: BaseTool,
+        call: ToolCall,
+        tool_id: Any | None = None,
+        *,
+        allowed_paths: list[Path] | None = None,
+        denied_paths: list[Path] | None = None,
+    ) -> tuple[ToolResult, dict[str, Any]]:
         """Execute a tool through centralized policy and confirmation gates."""
         qualified_id = getattr(tool_id, "qualified", None) or getattr(tool, "qualified_id", None)
         audit: dict[str, Any] = {
@@ -682,7 +727,11 @@ class Aries:
         audit["input"] = self._sanitize_arguments(filtered_args)
 
         decision = self.tool_policy.evaluate(
-            tool, filtered_args, workspace=self.workspace.current.root if self.workspace.current else None
+            tool,
+            filtered_args,
+            workspace=self.workspace.current.root if self.workspace.current else None,
+            allowed_paths=allowed_paths,
+            denied_paths=denied_paths,
         )
         audit["policy_reason"] = decision.reason
         audit["policy_allowed"] = decision.allowed
@@ -727,8 +776,8 @@ class Aries:
 
         exec_args = dict(filtered_args)
         exec_args.setdefault("workspace", self.workspace.current)
-        exec_args.setdefault("allowed_paths", self.config.tools.allowed_paths)
-        exec_args.setdefault("denied_paths", self.config.tools.denied_paths)
+        exec_args.setdefault("allowed_paths", allowed_paths or self.config.tools.allowed_paths)
+        exec_args.setdefault("denied_paths", denied_paths or self.config.tools.denied_paths)
 
         start = time.time()
         try:

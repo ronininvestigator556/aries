@@ -83,6 +83,11 @@ Inside Aries:
 /policy
 ```
 
+### Enable Desktop Ops (Optional)
+1. Configure a Desktop Commander MCP server in `providers.mcp.servers`.
+2. Set `desktop_ops.enabled: true` and `desktop_ops.server_id` to match the MCP server id.
+3. Run `/desktop <goal>` to execute Desktop Ops workflows.
+
 ---
 
 ## Core Concepts
@@ -421,6 +426,8 @@ Update `allowed_roots` in `config.yaml`, then verify with `/policy`.
 - Minimize `allowed_roots`
 - Use separate workspaces per client/project
 - Treat RAG corpora as sensitive
+- Desktop Ops enforces workspace boundary checks and mode-aware approvals.
+- Destructive, privileged, and networked Desktop Ops actions always require explicit approval.
 
 ---
 

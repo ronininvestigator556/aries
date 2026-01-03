@@ -1,1 +1,0 @@
-"""Playwright MCP Server implementation."""

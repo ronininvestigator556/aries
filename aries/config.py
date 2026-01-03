@@ -126,6 +126,10 @@ class DesktopOpsConfig(BaseModel):
     max_steps: int = Field(default=40, ge=1, le=200)
     max_retries_per_step: int = Field(default=2, ge=0, le=5)
     process_poll: DesktopOpsProcessPollConfig = Field(default_factory=DesktopOpsProcessPollConfig)
+    python_bootstrap_extras: list[str] = Field(
+        default_factory=list,
+        description="Extras to install with python_bootstrap (dev, rag, all)",
+    )
 
     @field_validator("mode")
     @classmethod

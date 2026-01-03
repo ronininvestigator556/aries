@@ -59,6 +59,8 @@ python -m pip install -U pip
 pip install -e .
 ```
 
+> **Note:** Local environment/build outputs (for example `.venv*`, `build/`, or `*.egg-info/`) are generated artifacts and should not be committed to version control.
+
 ### Start Aries
 Preferred (all platforms):
 ```bash

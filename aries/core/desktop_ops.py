@@ -9,9 +9,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from aries.config import DesktopOpsConfig
+from aries.core.desktop_recipes import DesktopRecipeRegistry, RecipeStep, recipe_prefix
+from aries.core.file_edit import FileEditPipeline
 from aries.core.message import ToolCall
 from aries.core.workspace import resolve_and_validate_path
 from aries.tools.base import ToolResult
@@ -74,9 +76,6 @@ class DesktopOpsResult:
     run_log_path: Path | None = None
 
 
-_RECIPE_PREFIX = "desktop.recipe."
-
-
 class DesktopOpsController:
     """Controller implementing the Desktop Ops action loop."""
 
@@ -86,6 +85,8 @@ class DesktopOpsController:
         self.mode = DesktopOpsMode(mode or self.config.mode)
         self.max_steps = self.config.max_steps
         self.max_retries = self.config.max_retries_per_step
+        self.recipe_registry = DesktopRecipeRegistry(self.config)
+        self._file_edit_pipeline: FileEditPipeline | None = None
 
     async def run(self, goal: str) -> DesktopOpsResult:
         context = self._build_context(goal)
@@ -112,6 +113,32 @@ class DesktopOpsController:
 
         tool_definitions = self._tool_definitions()
         retry_counts: dict[str, int] = {}
+
+        preferred_recipe = self.recipe_registry.match_goal(goal, context)
+        if preferred_recipe:
+            context.audit_log.append(
+                {
+                    "event": "recipe_preference",
+                    "recipe": preferred_recipe.name,
+                    "arguments": preferred_recipe.arguments,
+                    "reason": preferred_recipe.reason,
+                }
+            )
+            recipe_call = ToolCall(
+                id="recipe_preference",
+                name=f"{recipe_prefix()}{preferred_recipe.name}",
+                arguments=preferred_recipe.arguments,
+            )
+            result = await self._execute_recipe(context, recipe_call)
+            artifacts.extend(result.get("artifacts", []))
+            if result.get("success"):
+                return await self._finalize(
+                    context,
+                    "completed",
+                    result.get("message", {}).get("content") or "Desktop Ops completed.",
+                    artifacts,
+                )
+            messages.append(result.get("message"))
 
         for step_index in range(self.max_steps):
             context.step_index = step_index
@@ -198,81 +225,11 @@ class DesktopOpsController:
 
     def _tool_definitions(self) -> list[dict[str, Any]]:
         definitions = list(self.app.tool_registry.list_tool_definitions(qualified=True))
-        definitions.extend(self._recipe_tool_definitions())
+        definitions.extend(self.recipe_registry.definitions())
         return definitions
 
-    def _recipe_tool_definitions(self) -> list[dict[str, Any]]:
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": f"{_RECIPE_PREFIX}repo_clone_open",
-                    "description": "Clone a repository and open it in the workspace.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "repo_url": {"type": "string"},
-                            "dest": {"type": "string"},
-                        },
-                        "required": ["repo_url", "dest"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": f"{_RECIPE_PREFIX}python_bootstrap",
-                    "description": "Create a virtualenv and install dependencies.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"path": {"type": "string"}},
-                        "required": ["path"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": f"{_RECIPE_PREFIX}run_tests",
-                    "description": "Run tests using pytest or unittest.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"path": {"type": "string"}},
-                        "required": ["path"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": f"{_RECIPE_PREFIX}build_project",
-                    "description": "Build the project using common build commands.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"path": {"type": "string"}},
-                        "required": ["path"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": f"{_RECIPE_PREFIX}log_tail",
-                    "description": "Start, stream, and stop a log tailing process.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string"},
-                            "lines": {"type": "integer"},
-                        },
-                        "required": ["path"],
-                    },
-                },
-            },
-        ]
-
     async def _execute_call(self, context: RunContext, call: ToolCall) -> dict[str, Any]:
-        if call.name.startswith(_RECIPE_PREFIX):
+        if call.name.startswith(recipe_prefix()):
             return await self._execute_recipe(context, call)
 
         tool_id, tool, error = self.app._resolve_tool_reference(call.name)
@@ -280,30 +237,21 @@ class DesktopOpsController:
             context.audit_log.append(
                 {"event": "tool_resolution_failed", "tool": call.name, "error": error}
             )
-        return self._tool_message(call.id, call.name, False, error or "Unknown tool.")
+            return self._tool_message(call.id, call.name, False, error or "Unknown tool.")
 
-        risk = self._classify_risk(tool, call.arguments)
-        approved, approval_reason, allowed_paths = await self._check_approval(
-            context, risk, tool, call.arguments
-        )
-        if not approved:
-            context.audit_log.append(
-                {
-                    "event": "approval_denied",
-                    "tool": call.name,
-                    "risk": risk.value,
-                    "reason": approval_reason,
-                }
-            )
-            return self._tool_message(call.id, call.name, False, f"Approval denied ({approval_reason}).")
-
-        tool_result, audit = await self.app._run_tool(
+        tool_result, audit, policy_entry = await self._execute_tool_call_with_policy(
+            context,
             tool,
-            call,
             tool_id,
-            allowed_paths=allowed_paths,
+            call,
         )
-        self._record_tool_audit(context, tool, call, tool_result, audit, risk, approval_reason)
+        if not policy_entry["approval_result"]:
+            return self._tool_message(
+                call.id,
+                call.name,
+                False,
+                f"Approval denied ({policy_entry['approval_reason']}).",
+            )
 
         if tool_result.success and tool_result.artifacts:
             for artifact in tool_result.artifacts:
@@ -314,97 +262,146 @@ class DesktopOpsController:
         return self._tool_message(call.id, call.name, tool_result.success, content, tool_result.artifacts)
 
     async def _execute_recipe(self, context: RunContext, call: ToolCall) -> dict[str, Any]:
-        recipe = call.name[len(_RECIPE_PREFIX) :]
-        handlers = {
-            "repo_clone_open": self._recipe_repo_clone_open,
-            "python_bootstrap": self._recipe_python_bootstrap,
-            "run_tests": self._recipe_run_tests,
-            "build_project": self._recipe_build_project,
-            "log_tail": self._recipe_log_tail,
-        }
-        handler = handlers.get(recipe)
-        if not handler:
-            return self._tool_message(call.id, call.name, False, f"Unknown recipe: {recipe}")
-        result = await handler(context, call.arguments)
-        content = result.content if result.success else (result.error or "")
-        return self._tool_message(call.id, call.name, result.success, content, result.artifacts)
+        recipe = call.name[len(recipe_prefix()) :]
+        try:
+            plan = self.recipe_registry.plan(recipe, call.arguments, context)
+        except Exception as exc:
+            return self._tool_message(call.id, call.name, False, str(exc))
 
-    async def _recipe_repo_clone_open(self, context: RunContext, args: dict[str, Any]) -> ToolResult:
-        repo_url = args.get("repo_url")
-        dest = args.get("dest")
-        if not repo_url or not dest:
-            return ToolResult(success=False, content="", error="repo_url and dest are required")
-        commands = [
-            f"git clone {repo_url} {dest}",
-            f"cd {dest} && git status -sb",
-        ]
-        return await self._run_shell_sequence(context, commands, label="repo_clone_open")
+        context.audit_log.append(
+            {
+                "event": "recipe_plan",
+                "recipe": recipe,
+                "steps": [
+                    {
+                        "name": step.name,
+                        "tool": step.tool_name,
+                        "description": step.description,
+                    }
+                    for step in plan.steps
+                ],
+            }
+        )
 
-    async def _recipe_python_bootstrap(self, context: RunContext, args: dict[str, Any]) -> ToolResult:
-        path = args.get("path")
-        if not path:
-            return ToolResult(success=False, content="", error="path is required")
-        commands = [
-            f"cd {path} && python -m venv .venv",
-            f"cd {path} && . .venv/bin/activate && python -m pip install -U pip",
-            f"cd {path} && . .venv/bin/activate && python -m pip install -r requirements.txt",
-        ]
-        return await self._run_shell_sequence(context, commands, label="python_bootstrap")
+        max_seconds = call.arguments.get("max_seconds") if recipe == "log_tail" else None
+        step_results: list[dict[str, Any]] = []
+        artifacts: list[dict[str, Any]] = []
+        last_result: dict[str, Any] | None = None
 
-    async def _recipe_run_tests(self, context: RunContext, args: dict[str, Any]) -> ToolResult:
-        path = args.get("path")
-        if not path:
-            return ToolResult(success=False, content="", error="path is required")
-        commands = [
-            f"cd {path} && pytest",
-            f"cd {path} && python -m unittest discover",
-        ]
-        return await self._run_shell_sequence(context, commands, label="run_tests")
+        steps_queue = list(plan.steps)
+        while steps_queue:
+            step = steps_queue.pop(0)
+            step_args = step.arguments(context, last_result) if callable(step.arguments) else step.arguments
+            if not step_args and step.tool_name == "stop_process":
+                context.audit_log.append(
+                    {
+                        "event": "recipe_step_skipped",
+                        "recipe": recipe,
+                        "step": step.name,
+                        "reason": "missing_process_id",
+                    }
+                )
+                continue
+            tool_id, tool, error = self._resolve_recipe_tool(step)
+            if error or tool is None:
+                context.audit_log.append(
+                    {
+                        "event": "recipe_step_failed",
+                        "recipe": recipe,
+                        "step": step.name,
+                        "error": error or "Tool unavailable",
+                    }
+                )
+                return self._tool_message(call.id, call.name, False, error or "Tool unavailable")
 
-    async def _recipe_build_project(self, context: RunContext, args: dict[str, Any]) -> ToolResult:
-        path = args.get("path")
-        if not path:
-            return ToolResult(success=False, content="", error="path is required")
-        commands = [
-            f"cd {path} && make build",
-            f"cd {path} && npm run build",
-        ]
-        return await self._run_shell_sequence(context, commands, label="build_project")
-
-    async def _recipe_log_tail(self, context: RunContext, args: dict[str, Any]) -> ToolResult:
-        path = args.get("path")
-        lines = args.get("lines", 50)
-        if not path:
-            return ToolResult(success=False, content="", error="path is required")
-        command = f"tail -n {lines} -f {path}"
-        return await self._run_shell_sequence(context, [command], label="log_tail")
-
-    async def _run_shell_sequence(
-        self, context: RunContext, commands: Iterable[str], *, label: str
-    ) -> ToolResult:
-        tool_id, tool, error = self.app._resolve_tool_reference("shell")
-        if error or tool is None:
-            return ToolResult(success=False, content="", error=error or "Shell tool unavailable")
-        outputs: list[str] = []
-        for cmd in commands:
-            call = ToolCall(name=getattr(tool_id, "qualified", tool.name), arguments={"command": cmd})
-            result, audit = await self.app._run_tool(tool, call, tool_id)
-            self._record_tool_audit(
+            tool_call = ToolCall(
+                id=f"recipe:{recipe}:{step.name}",
+                name=getattr(tool_id, "qualified", tool.name),
+                arguments=step_args,
+            )
+            result, audit, policy_entry = await self._execute_tool_call_with_policy(
                 context,
                 tool,
-                call,
-                result,
-                audit,
-                self._classify_risk(tool, call.arguments),
-                f"recipe:{label}",
+                tool_id,
+                tool_call,
+                recipe=recipe,
+                step=step.name,
             )
+            if not policy_entry["approval_result"]:
+                return self._tool_message(
+                    call.id,
+                    call.name,
+                    False,
+                    f"Approval denied ({policy_entry['approval_reason']}).",
+                )
+            step_results.append(
+                {
+                    "step": step.name,
+                    "tool": tool_call.name,
+                    "success": result.success,
+                    "output": result.content if result.success else (result.error or ""),
+                    "metadata": result.metadata or {},
+                }
+            )
+
+            if result.artifacts:
+                artifacts.extend(result.artifacts)
+                for artifact in result.artifacts:
+                    context.audit_log.append({"event": "artifact", "artifact": artifact})
+
+            override = max_seconds if step.name == "start_tail" else None
+            await self._maybe_stream_process_output(context, tool, result, max_total_seconds=override)
+
             if not result.success:
-                return result
-            outputs.append(result.content)
-        return ToolResult(success=True, content="\n".join(outputs))
+                output = result.error or result.content or ""
+                if step.on_failure:
+                    followups = list(step.on_failure(output))
+                    if followups:
+                        steps_queue = followups + steps_queue
+                        last_result = {
+                            "success": result.success,
+                            "output": output,
+                            "metadata": result.metadata or {},
+                        }
+                        continue
+                content = result.error or ""
+                return self._tool_message(call.id, call.name, False, content, artifacts)
+
+            last_result = {
+                "success": result.success,
+                "output": result.content,
+                "metadata": result.metadata or {},
+            }
+
+        done = plan.done_criteria(context, step_results)
+        if not done:
+            return self._tool_message(
+                call.id,
+                call.name,
+                False,
+                "Recipe did not meet completion criteria.",
+                artifacts,
+            )
+        summary = plan.summary or "Recipe completed."
+        return self._tool_message(call.id, call.name, True, summary, artifacts)
+
+    def _resolve_recipe_tool(self, step: RecipeStep) -> tuple[Any | None, Any | None, str | None]:
+        fallback_names = [step.tool_name]
+        if step.tool_name == "stop_process":
+            fallback_names.extend(["terminate_process", "kill_process"])
+        for name in fallback_names:
+            tool_id, tool, error = self.app._resolve_tool_reference(name)
+            if tool:
+                return tool_id, tool, None
+        return None, None, error or f"Tool {step.tool_name} unavailable"
 
     async def _maybe_stream_process_output(
-        self, context: RunContext, tool: Any, result: ToolResult
+        self,
+        context: RunContext,
+        tool: Any,
+        result: ToolResult,
+        *,
+        max_total_seconds: float | None = None,
     ) -> None:
         if not result.success:
             return
@@ -428,11 +425,15 @@ class DesktopOpsController:
             return
 
         poll_cfg = self.config.process_poll
+        if max_total_seconds is not None:
+            max_total_seconds = float(max_total_seconds)
         delay = poll_cfg.initial_ms / 1000.0
         start_time = datetime.now()
+        stalled = False
         while True:
             elapsed = datetime.now() - start_time
-            if elapsed.total_seconds() > poll_cfg.max_total_seconds:
+            if elapsed.total_seconds() > (max_total_seconds or poll_cfg.max_total_seconds):
+                stalled = True
                 break
             output = await self._poll_process(read_tool, read_tool_id, handle)
             if output:
@@ -443,15 +444,23 @@ class DesktopOpsController:
                 )
             idle = datetime.now() - handle.last_output_at
             if idle.total_seconds() > poll_cfg.max_idle_seconds:
+                stalled = True
                 break
             await asyncio.sleep(delay)
             delay = min(delay * 2, poll_cfg.max_ms / 1000.0)
+
+        if stalled:
+            context.audit_log.append(
+                {"event": "process_stalled", "process_id": handle.process_id}
+            )
+            await self._stop_process(context, handle)
 
     async def _poll_process(self, tool: Any, tool_id: Any, handle: ProcessHandle) -> str:
         arg_name = self._process_arg_name(tool)
         if not arg_name:
             return ""
         call = ToolCall(
+            id=f"process_read:{handle.process_id}",
             name=getattr(tool_id, "qualified", tool.name),
             arguments={arg_name: handle.process_id},
         )
@@ -463,6 +472,51 @@ class DesktopOpsController:
                 return f"{truncated}\n{summary}"
             return result.content
         return result.error or ""
+
+    async def _stop_process(self, context: RunContext, handle: ProcessHandle) -> None:
+        tool_id, tool, error = self._resolve_recipe_tool(
+            RecipeStep(name="stop_process", tool_name="stop_process", arguments={})
+        )
+        if error or tool is None:
+            context.audit_log.append(
+                {
+                    "event": "process_stop_failed",
+                    "process_id": handle.process_id,
+                    "error": error or "Stop process tool unavailable",
+                }
+            )
+            return
+        arg_name = self._process_arg_name(tool)
+        if not arg_name:
+            context.audit_log.append(
+                {
+                    "event": "process_stop_failed",
+                    "process_id": handle.process_id,
+                    "error": "Stop process tool missing process id param",
+                }
+            )
+            return
+        tool_call = ToolCall(
+            id=f"process_stop:{handle.process_id}",
+            name=getattr(tool_id, "qualified", tool.name),
+            arguments={arg_name: handle.process_id},
+        )
+        result, _, _ = await self._execute_tool_call_with_policy(
+            context,
+            tool,
+            tool_id,
+            tool_call,
+            recipe="process_stream",
+            step="stop_process",
+        )
+        context.audit_log.append(
+            {
+                "event": "process_stop",
+                "process_id": handle.process_id,
+                "success": result.success,
+                "error": result.error,
+            }
+        )
 
     def _find_process_reader(self) -> tuple[Any | None, Any | None]:
         for name in ("read_process_output", "process_read", "read_process"):
@@ -500,6 +554,62 @@ class DesktopOpsController:
             "audit": audit,
         }
         context.audit_log.append(entry)
+
+    async def _execute_tool_call_with_policy(
+        self,
+        context: RunContext,
+        tool: Any,
+        tool_id: Any,
+        call: ToolCall,
+        *,
+        recipe: str | None = None,
+        step: str | None = None,
+    ) -> tuple[ToolResult, dict[str, Any], dict[str, Any]]:
+        risk = self._classify_risk(tool, call.arguments)
+        paths_validated = self._validate_paths(context, tool, call.arguments)
+        approval_required = self._requires_approval(risk, tool, call.arguments) or self._requires_path_override(
+            context, tool, call.arguments
+        )
+        start_time = datetime.now().isoformat()
+        approved, approval_reason, allowed_paths = await self._check_approval(
+            context, risk, tool, call.arguments
+        )
+        policy_entry = {
+            "event": "policy_check",
+            "recipe": recipe,
+            "step": step,
+            "tool_id": getattr(tool_id, "qualified", tool.name),
+            "risk": risk.value,
+            "risk_level": getattr(tool, "risk_level", "unknown"),
+            "mode": self.mode.value,
+            "approval_required": approval_required,
+            "approval_result": approved,
+            "approval_reason": approval_reason,
+            "paths_validated": paths_validated,
+            "allowlist_match": self._allowlisted(tool, call.arguments),
+            "denylist_match": False,
+            "start_time": start_time,
+            "end_time": None,
+        }
+        context.audit_log.append(policy_entry)
+        self.app.last_policy_trace = policy_entry
+        if not approved:
+            policy_entry["end_time"] = datetime.now().isoformat()
+            return (
+                ToolResult(success=False, content="", error=f"Approval denied ({approval_reason})."),
+                {},
+                policy_entry,
+            )
+
+        tool_result, audit = await self.app._run_tool(
+            tool,
+            call,
+            tool_id,
+            allowed_paths=allowed_paths,
+        )
+        self._record_tool_audit(context, tool, call, tool_result, audit, risk, approval_reason)
+        policy_entry["end_time"] = datetime.now().isoformat()
+        return tool_result, audit, policy_entry
 
     async def _check_approval(
         self,
@@ -543,8 +653,10 @@ class DesktopOpsController:
         if self.mode == DesktopOpsMode.STRICT:
             return True
         if risk.value in self.config.require_approval_for:
-            return True
+            return not self._allowlisted(tool, args)
         if self.mode == DesktopOpsMode.GUIDE:
+            if risk == DesktopRisk.EXEC_USERSPACE and self._allowlisted(tool, args):
+                return False
             return risk not in {DesktopRisk.READ_ONLY}
         if self.mode == DesktopOpsMode.COMMANDER:
             if risk == DesktopRisk.EXEC_USERSPACE and self._allowlisted(tool, args):
@@ -618,6 +730,29 @@ class DesktopOpsController:
             paths.append(resolved)
         base = [Path(p).expanduser().resolve() for p in context.allowed_roots]
         return list({*base, *paths})
+
+    def _validate_paths(
+        self,
+        context: RunContext,
+        tool: Any,
+        args: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        results: dict[str, dict[str, Any]] = {}
+        for param in getattr(tool, "path_params", ()) or ():
+            value = args.get(param)
+            if not value:
+                continue
+            try:
+                resolved = resolve_and_validate_path(
+                    value,
+                    workspace=self.app.workspace.current,
+                    allowed_paths=self._allowed_roots(),
+                    denied_paths=getattr(self.app.tool_policy, "denied_paths", None),
+                )
+                results[param] = {"value": value, "resolved": str(resolved), "allowed": True}
+            except Exception as exc:
+                results[param] = {"value": value, "allowed": False, "error": str(exc)}
+        return results
 
     def _classify_risk(self, tool: Any, args: dict[str, Any]) -> DesktopRisk:
         desktop_risk = getattr(tool, "desktop_risk", None)
@@ -723,6 +858,18 @@ class DesktopOpsController:
         if self.app.workspace.current:
             roots.append(self.app.workspace.current.root)
         return roots
+
+    def _file_edit(self) -> FileEditPipeline:
+        if self._file_edit_pipeline:
+            return self._file_edit_pipeline
+        workspace = self.app.workspace.current
+        self._file_edit_pipeline = FileEditPipeline(
+            workspace=workspace.root if workspace else None,
+            allowed_paths=self._allowed_roots(),
+            denied_paths=getattr(self.app.tool_policy, "denied_paths", None),
+            artifact_dir=workspace.artifact_dir if workspace else None,
+        )
+        return self._file_edit_pipeline
 
     def _truncate_output(self, text: str, limit: int = 4000) -> tuple[str, bool]:
         if len(text) <= limit:

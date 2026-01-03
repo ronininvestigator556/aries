@@ -63,7 +63,12 @@ from aries.core.ollama_client import OllamaClient
 from aries.core.tool_policy import ToolPolicy
 from aries.core.tool_registry import AmbiguousToolError, ToolRegistry
 from aries.core.profile import Profile, ProfileManager
-from aries.core.workspace import ArtifactRef, TranscriptEntry, WorkspaceManager
+from aries.core.workspace import (
+    ArtifactRef,
+    TranscriptEntry,
+    WorkspaceManager,
+    resolve_and_validate_path,
+)
 from aries.exceptions import FileToolError
 from aries.core.tool_validation import validate_tools
 from aries.core.tokenizer import TokenEstimator
@@ -150,6 +155,7 @@ class Aries:
         self.last_model_turn: dict[str, Any] | None = None
         self.next_input_default: str = ""
         self.processing_task: asyncio.Task | None = None
+        self.last_policy_trace: dict[str, Any] | None = None
 
         # Phase B: Agent Runs
         self.current_run = None
@@ -733,6 +739,50 @@ class Aries:
             allowed_paths=allowed_paths,
             denied_paths=denied_paths,
         )
+        path_validation: dict[str, dict[str, Any]] = {}
+        for param in getattr(tool, "path_params", ()):
+            value = filtered_args.get(param)
+            if not value:
+                continue
+            try:
+                resolved = resolve_and_validate_path(
+                    value,
+                    workspace=self.workspace.current,
+                    allowed_paths=allowed_paths or self.config.tools.allowed_paths,
+                    denied_paths=denied_paths or self.config.tools.denied_paths,
+                )
+                path_validation[param] = {
+                    "value": value,
+                    "resolved": str(resolved),
+                    "allowed": True,
+                }
+            except Exception as exc:
+                path_validation[param] = {"value": value, "allowed": False, "error": str(exc)}
+        allowlist = getattr(self.config.tools, "allowlist", None) or getattr(
+            self.config.tools, "allowed_tools", None
+        )
+        denylist = getattr(self.config.tools, "denylist", None) or getattr(
+            self.config.tools, "denied_tools", None
+        )
+        qualified_name = qualified_id or tool.name
+        self.last_policy_trace = {
+            "event": "policy_check",
+            "recipe": None,
+            "step": None,
+            "tool_id": qualified_name,
+            "risk": getattr(tool, "risk_level", "unknown"),
+            "risk_level": getattr(tool, "risk_level", "unknown"),
+            "mode": self.desktop_ops_mode,
+            "approval_required": self.config.tools.confirmation_required
+            and self._requires_confirmation(tool),
+            "approval_result": decision.allowed,
+            "approval_reason": decision.reason,
+            "paths_validated": path_validation,
+            "allowlist_match": bool(allowlist and qualified_name in allowlist),
+            "denylist_match": bool(denylist and qualified_name in denylist),
+            "start_time": None,
+            "end_time": None,
+        }
         audit["policy_reason"] = decision.reason
         audit["policy_allowed"] = decision.allowed
         audit["duration_ms"] = 0

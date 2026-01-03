@@ -259,6 +259,7 @@ class MCPTool(BaseTool):
         self.provider_id = provider_id
         self.provider_version = provider_version
         self.risk_level = self._map_risk(definition.risk)
+        self.desktop_risk = self._normalize_desktop_risk(definition.risk)
         self.transport_requires_network = default_transport_requires_network
         self.tool_requires_network = (
             bool(definition.requires_network)
@@ -273,6 +274,8 @@ class MCPTool(BaseTool):
         self.mutates_state = bool(definition.mutates_state)
         self.emits_artifacts = bool(definition.emits_artifacts)
         self.path_params = tuple(definition.path_params or ())
+        if self.desktop_risk == "NETWORK":
+            self.tool_requires_network = True
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -285,11 +288,43 @@ class MCPTool(BaseTool):
         normalized = str(risk).lower()
         if normalized in {"read", "write", "exec"}:
             return normalized
+        normalized_upper = str(risk).upper()
+        if normalized_upper in {
+            "READ_ONLY",
+            "WRITE_SAFE",
+            "WRITE_DESTRUCTIVE",
+            "EXEC_USERSPACE",
+            "EXEC_PRIVILEGED",
+            "NETWORK",
+        }:
+            return {
+                "READ_ONLY": "read",
+                "WRITE_SAFE": "write",
+                "WRITE_DESTRUCTIVE": "write",
+                "EXEC_USERSPACE": "exec",
+                "EXEC_PRIVILEGED": "exec",
+                "NETWORK": "exec",
+            }[normalized_upper]
         self._warn(
             f"risk:{self.name}",
             f"MCP tool '{self.name}' has unrecognized risk '{risk}'; defaulting to exec.",
         )
         return "exec"
+
+    def _normalize_desktop_risk(self, risk: str | None) -> str:
+        if not risk:
+            return "EXEC_USERSPACE"
+        normalized = str(risk).strip().upper()
+        if normalized in {
+            "READ_ONLY",
+            "WRITE_SAFE",
+            "WRITE_DESTRUCTIVE",
+            "EXEC_USERSPACE",
+            "EXEC_PRIVILEGED",
+            "NETWORK",
+        }:
+            return normalized
+        return "EXEC_USERSPACE"
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         arguments = self._prepare_arguments(kwargs)

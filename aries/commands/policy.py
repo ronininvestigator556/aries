@@ -31,7 +31,7 @@ class PolicyCommand(BaseCommand):
 
     name = "policy"
     description = "Inspect tool policy status and dry-run tool evaluations"
-    usage = "show | explain <tool> <json_args>"
+    usage = "show | explain <tool> <json_args> | explain-last"
 
     async def execute(self, app: "Aries", args: str) -> None:
         args = args.strip()
@@ -39,6 +39,10 @@ class PolicyCommand(BaseCommand):
         verbose_flag = "--verbose" in parts
         if args.startswith("show") or not args:
             self._show_policy(app, verbose=verbose_flag)
+            return
+
+        if args.startswith("explain-last"):
+            self._explain_last(app)
             return
 
         if args.startswith("explain"):
@@ -71,6 +75,7 @@ class PolicyCommand(BaseCommand):
             "\n[bold]/policy[/bold] commands:\n"
             "  /policy show\n"
             "  /policy explain <tool_name> <json_args>\n\n"
+            "  /policy explain-last\n\n"
             "Example: /policy explain write_file {\"path\":\"notes.txt\",\"content\":\"hello\"}\n"
         )
 
@@ -320,3 +325,22 @@ class PolicyCommand(BaseCommand):
         meta_table.add_row("Confirmation required:", "yes" if confirmation_needed else "no")
 
         console.print(Panel(meta_table, title="Policy explain", border_style="cyan"))
+
+    def _explain_last(self, app: "Aries") -> None:
+        trace = getattr(app, "last_policy_trace", None)
+        if not trace:
+            display_error("No policy trace recorded yet.")
+            return
+
+        table = Table.grid(padding=(0, 1))
+        table.add_row("Tool:", str(trace.get("tool_id", "unknown")))
+        table.add_row("Risk level:", str(trace.get("risk_level", trace.get("risk", "unknown"))))
+        table.add_row("Path validation:", json.dumps(trace.get("paths_validated", {})))
+        table.add_row("Mode:", str(trace.get("mode", "unknown")))
+        table.add_row("Approval required:", "yes" if trace.get("approval_required") else "no")
+        table.add_row("Approval reason:", str(trace.get("approval_reason", "unknown")))
+        table.add_row("Approved:", "yes" if trace.get("approval_result") else "no")
+        table.add_row("Allowlist match:", "yes" if trace.get("allowlist_match") else "no")
+        table.add_row("Denylist match:", "yes" if trace.get("denylist_match") else "no")
+
+        console.print(Panel(table, title="Policy trace", border_style="cyan"))

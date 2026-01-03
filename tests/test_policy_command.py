@@ -153,6 +153,35 @@ async def test_policy_explain_shows_network_semantics(tmp_path: Path, capsys: py
 
 
 @pytest.mark.anyio
+async def test_policy_explain_last_reports_trace_fields(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = _make_config(tmp_path)
+    app = Aries(config)
+    app.last_policy_trace = {
+        "tool_id": "dummy_tool",
+        "risk": "WRITE_DESTRUCTIVE",
+        "paths_validated": {"path": {"allowed": True, "resolved": "/tmp/demo"}},
+        "mode": "commander",
+        "approval_required": True,
+        "approval_reason": "manual",
+        "approval_result": True,
+        "allowlist_match": False,
+        "denylist_match": False,
+    }
+    command = PolicyCommand()
+
+    await command.execute(app, "explain-last")
+
+    output = capsys.readouterr().out
+    assert "Policy trace" in output
+    assert "dummy_tool" in output
+    assert "WRITE_DESTRUCTIVE" in output
+    assert "Approval reason" in output
+    assert "Allowlist match" in output
+
+
+@pytest.mark.anyio
 async def test_policy_show_reports_inventory_issues(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

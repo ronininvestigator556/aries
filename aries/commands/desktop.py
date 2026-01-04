@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import shlex
 from typing import TYPE_CHECKING
 
 from aries.commands.base import BaseCommand
@@ -19,7 +20,7 @@ class DesktopCommand(BaseCommand):
 
     name = "desktop"
     description = "Run Desktop Ops workflows"
-    usage = "<goal> | mode <guide|commander|strict> | status"
+    usage = "<goal> | --plan \"<goal>\" | --dry-run \"<goal>\" | mode <guide|commander|strict> | status"
 
     async def execute(self, app: "Aries", args: str) -> None:
         args = args.strip()
@@ -40,6 +41,22 @@ class DesktopCommand(BaseCommand):
             display_success(f"Desktop Ops mode set to {mode}.")
             return
 
+        tokens = shlex.split(args)
+        if tokens and tokens[0] in {"--plan", "--dry-run"}:
+            if len(tokens) < 2:
+                display_error("Provide a request string after --plan or --dry-run.")
+                return
+            if not app.workspace.current:
+                display_error("No workspace open. Use /workspace open <name> first.")
+                return
+            request = " ".join(tokens[1:])
+            controller = DesktopOpsController(app, mode=app.desktop_ops_mode)
+            plan_output, _ = await controller.plan(request, dry_run=tokens[0] == "--dry-run")
+            display_info(plan_output)
+            app.last_action_summary = plan_output
+            app.last_action_status = "Planned" if tokens[0] == "--plan" else "Dry-run"
+            return
+
         if not app.workspace.current:
             display_error("No workspace open. Use /workspace open <name> first.")
             return
@@ -50,7 +67,8 @@ class DesktopCommand(BaseCommand):
         app.last_action_status = result.status
         if result.run_log_path:
             display_info(f"Desktop Ops audit log: {result.run_log_path}")
+        display_info(f"Desktop Ops summary:\\n{result.summary}")
         if result.status == "completed":
-            display_success(result.summary)
+            display_success("Desktop Ops completed.")
         else:
-            display_warning(result.summary)
+            display_warning(f"Desktop Ops ended with status: {result.status}.")

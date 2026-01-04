@@ -207,6 +207,8 @@ async def test_desktop_ops_golden_transcript_episodes(
         result = await controller.run(f"Run episode: {episode.name}")
 
         assert result.status == "completed"
+        assert "Commands executed" in result.summary
+        assert "Artifacts" in result.summary
         assert episode.command in result.summary
         assert read_tool.read_calls >= 2
         assert any(

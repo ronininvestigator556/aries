@@ -134,6 +134,11 @@ class Aries:
         self.current_model: str = config.ollama.default_model
         self.current_rag: str | None = None
         self.desktop_ops_mode: str = getattr(config.desktop_ops, "mode", "guide")
+        self.desktop_ops_state: dict[str, Any] = {
+            "cwd": None,
+            "recipe": None,
+            "active_processes": 0,
+        }
         self.conversation_id = str(uuid.uuid4())
         self._rag_retrieval_attempted: bool = False
 
@@ -173,7 +178,12 @@ class Aries:
         last_action = self.last_action_summary
         desktop_mode = ""
         if getattr(self.config, "desktop_ops", None) and self.config.desktop_ops.enabled:
-            desktop_mode = f" | <b>DesktopOps:</b> {self.desktop_ops_mode}"
+            cwd = self.desktop_ops_state.get("cwd") or str(Path.cwd())
+            recipe = self.desktop_ops_state.get("recipe") or "-"
+            processes = self.desktop_ops_state.get("active_processes", 0)
+            desktop_mode = (
+                f" | <b>DesktopOps:</b> {self.desktop_ops_mode} cwd={cwd} recipe={recipe} procs={processes}"
+            )
         
         # Add run status if active
         run_status = ""

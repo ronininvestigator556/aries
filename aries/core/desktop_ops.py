@@ -85,10 +85,17 @@ class DesktopOpsResult:
 class DesktopOpsController:
     """Controller implementing the Desktop Ops action loop."""
 
-    def __init__(self, app: Any, *, mode: str | None = None) -> None:
+    def __init__(
+        self,
+        app: Any,
+        *,
+        mode: str | None = None,
+        summary_format: str | None = None,
+    ) -> None:
         self.app = app
         self.config: DesktopOpsConfig = app.config.desktop_ops
         self.mode = DesktopOpsMode(mode or self.config.mode)
+        self.summary_format = summary_format or self.config.summary_format
         self.max_steps = self.config.max_steps
         self.max_retries = self.config.max_retries_per_step
         self.recipe_registry = DesktopRecipeRegistry(self.config)
@@ -233,7 +240,12 @@ class DesktopOpsController:
                     ],
                 }
             )
-        plan_output = self._format_plan_output(context, plan, recipe_name=recipe_name)
+        plan_output = self._format_plan_output(
+            context,
+            plan,
+            recipe_name=recipe_name,
+            dry_run=dry_run,
+        )
 
         if dry_run and plan:
             await self._run_dry_run_probes(context, plan)
@@ -857,6 +869,7 @@ class DesktopOpsController:
             artifacts=artifacts,
             artifact_registry=self.app.workspace.artifacts if self.app.workspace else None,
             outcome=outcome,
+            summary_format=self.summary_format,
         ).build()
         self._update_desktop_status(context, recipe=None)
         return DesktopOpsResult(
@@ -967,13 +980,15 @@ class DesktopOpsController:
         plan: Any | None,
         *,
         recipe_name: str | None,
+        dry_run: bool = False,
     ) -> str:
         lines = ["Desktop Ops plan", f"Recipe: {recipe_name or 'manual plan'}"]
         if not plan:
             lines.append("Steps: (none)")
             return "\n".join(lines)
         lines.append("Steps:")
-        for index, step in enumerate(plan.steps, start=1):
+        steps = sorted(plan.steps, key=lambda item: (item.tool_name, item.name))
+        for index, step in enumerate(steps, start=1):
             tool_id, tool, _ = self.app._resolve_tool_reference(step.tool_name)
             tool_label = getattr(tool_id, "qualified", step.tool_name)
             args = step.arguments(context, None) if callable(step.arguments) else step.arguments
@@ -981,15 +996,22 @@ class DesktopOpsController:
             risk = self._classify_risk(tool, args) if tool else DesktopRisk.READ_ONLY
             approval_required = False
             paths = {}
+            probe = False
             if tool:
                 paths = self._validate_paths(context, tool, args)
                 approval_required = self._requires_approval(risk, tool, args) or self._requires_path_override(
                     context, tool, args
                 )
+                if dry_run:
+                    probe = self._should_probe(tool, args, risk)
             lines.append(
                 f"  {index}. tool={tool_label} risk={risk.value} approval_required={'yes' if approval_required else 'no'}"
+                + (f" probe={'true' if probe else 'false'}" if dry_run else "")
             )
-            lines.append(f"     args={sanitized}")
+            lines.append(
+                "     args="
+                + json.dumps(sanitized, ensure_ascii=False, sort_keys=True, default=str)
+            )
             if paths:
                 lines.append("     paths:")
                 for param in sorted(paths):
@@ -1202,6 +1224,9 @@ class OutputCondenser:
     def condense(self, output: str) -> str:
         if not output:
             return ""
+        if self._contains_error(output):
+            self._last_chunk = output
+            return output
         if output == self._last_chunk:
             return "[no new output]"
         self._last_chunk = output
@@ -1218,6 +1243,11 @@ class OutputCondenser:
         if len(condensed) > self.max_bytes:
             condensed = condensed[: self.max_bytes] + "\n...[truncated]"
         return condensed
+
+    @staticmethod
+    def _contains_error(output: str) -> bool:
+        lowered = output.lower()
+        return any(token in lowered for token in ("error", "failed", "exception", "traceback"))
 
     @staticmethod
     def _is_progress_line(line: str) -> bool:

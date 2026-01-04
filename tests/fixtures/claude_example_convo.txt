@@ -1,0 +1,16 @@
+=== EPISODE: Build project ===
+start_process: npm run build
+read_process_output: > build started
+read_process_output: > build finished
+
+=== EPISODE: Run tests ===
+start_process: pytest -q
+read_process_output: > running tests
+read_process_output: > tests complete
+
+=== EPISODE: Fetch remote data ===
+start_process: curl https://example.com
+read_process_output: > 200 OK
+
+=== EPISODE: Stall ===
+start_process: sleep 10

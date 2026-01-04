@@ -25,6 +25,12 @@ def test_default_config_includes_disabled_mcp() -> None:
     assert config.providers.mcp.servers == []
 
 
+def test_default_config_includes_desktop_ops_defaults() -> None:
+    config = Config()
+    assert config.desktop_ops.enabled is False
+    assert config.desktop_ops.mode == "guide"
+
+
 def test_legacy_prompts_default_migrates_to_profile() -> None:
     migrated, warnings = migrate_config_data({"prompts": {"default": "legacy"}})
     assert migrated["profiles"]["default"] == "legacy"

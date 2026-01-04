@@ -41,7 +41,15 @@ class ToolPolicy:
         except Exception:
             return False
 
-    def evaluate(self, tool: BaseTool, args: dict[str, Any], *, workspace: Path | None = None) -> PolicyDecision:
+    def evaluate(
+        self,
+        tool: BaseTool,
+        args: dict[str, Any],
+        *,
+        workspace: Path | None = None,
+        allowed_paths: list[Path] | None = None,
+        denied_paths: list[Path] | None = None,
+    ) -> PolicyDecision:
         risk = getattr(tool, "risk_level", "read")
         mutates_state = bool(getattr(tool, "mutates_state", False))
         network_required = bool(
@@ -49,6 +57,8 @@ class ToolPolicy:
             or getattr(tool, "transport_requires_network", False)
             or getattr(tool, "tool_requires_network", False)
         )
+        allowed = allowed_paths or self.allowed_paths
+        denied = denied_paths or self.denied_paths
 
         if getattr(tool, "requires_shell", False) and not self.config.allow_shell:
             return PolicyDecision(False, f"Shell execution disabled by policy (risk={risk})")
@@ -62,8 +72,28 @@ class ToolPolicy:
             )
 
         for path_param in getattr(tool, "path_params", ()):
-            if not self._path_allowed(args.get(path_param), workspace):
+            if not self._path_allowed_with_overrides(args.get(path_param), workspace, allowed, denied):
                 return PolicyDecision(False, f"Path access denied by policy (risk={risk})")
 
         classification = "mutating" if mutates_state else "read"
         return PolicyDecision(True, f"allowed:{risk}:{classification}")
+
+    def _path_allowed_with_overrides(
+        self,
+        path: str | None,
+        workspace: Path | None,
+        allowed_paths: list[Path] | None,
+        denied_paths: list[Path] | None,
+    ) -> bool:
+        if not path:
+            return True
+        try:
+            resolve_and_validate_path(
+                path,
+                workspace=workspace,
+                allowed_paths=allowed_paths,
+                denied_paths=denied_paths,
+            )
+            return True
+        except Exception:
+            return False

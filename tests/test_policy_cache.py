@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aries.cli import Aries
+from aries.commands.policy import PolicyCommand
 from aries.config import Config
 from aries.core.desktop_ops import DesktopOpsController
 from aries.core.message import ToolCall
@@ -74,3 +75,32 @@ async def test_policy_cache_reuse_for_identical_calls(tmp_path: Path) -> None:
     assert policy_entries[1].get("cached") is True
     paths_validated = policy_entries[1].get("paths_validated") or {}
     assert paths_validated["path"].get("cached") is True
+
+
+@pytest.mark.asyncio
+async def test_policy_explain_last_reports_cache_source(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = Config()
+    config.workspace.root = tmp_path / "workspaces"
+
+    app = Aries(config)
+    app.last_policy_trace = {
+        "tool_id": "dummy_tool",
+        "risk": "READ_ONLY",
+        "paths_validated": {"path": {"allowed": True, "resolved": "/tmp/demo", "cached": True}},
+        "mode": "commander",
+        "approval_required": False,
+        "approval_reason": "auto",
+        "approval_result": True,
+        "allowlist_match": False,
+        "denylist_match": False,
+        "cached": True,
+    }
+    command = PolicyCommand()
+
+    await command.execute(app, "explain-last")
+
+    output = capsys.readouterr().out
+    assert "Cached:" in output
+    assert "Cache source:" in output

@@ -117,6 +117,7 @@ class DesktopOpsConfig(BaseModel):
 
     enabled: bool = False
     mode: str = Field(default="guide", description="guide | commander | strict")
+    summary_format: str = Field(default="text", description="text | markdown | json")
     server_id: str = Field(default="desktop_commander", description="MCP server id for Desktop Commander")
     allowed_roots: list[Path] = Field(default_factory=lambda: [Path(".")])
     auto_exec_allowlist: list[str] = Field(default_factory=list)
@@ -137,6 +138,14 @@ class DesktopOpsConfig(BaseModel):
         normalized = (value or "guide").strip().lower()
         if normalized not in {"guide", "commander", "strict"}:
             return "guide"
+        return normalized
+
+    @field_validator("summary_format")
+    @classmethod
+    def _normalize_summary_format(cls, value: str) -> str:
+        normalized = (value or "text").strip().lower()
+        if normalized not in {"text", "markdown", "json"}:
+            return "text"
         return normalized
 
 class PolicyDisplayConfig(BaseModel):

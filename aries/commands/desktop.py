@@ -20,7 +20,10 @@ class DesktopCommand(BaseCommand):
 
     name = "desktop"
     description = "Run Desktop Ops workflows"
-    usage = "<goal> | --plan \"<goal>\" | --dry-run \"<goal>\" | mode <guide|commander|strict> | status"
+    usage = (
+        "<goal> | --summary-format <text|markdown|json> <goal> | "
+        "--plan \"<goal>\" | --dry-run \"<goal>\" | mode <guide|commander|strict> | status"
+    )
 
     async def execute(self, app: "Aries", args: str) -> None:
         args = args.strip()
@@ -42,6 +45,17 @@ class DesktopCommand(BaseCommand):
             return
 
         tokens = shlex.split(args)
+        summary_format = None
+        if "--summary-format" in tokens:
+            index = tokens.index("--summary-format")
+            if index + 1 >= len(tokens):
+                display_error("Provide a format after --summary-format (text, markdown, json).")
+                return
+            summary_format = tokens[index + 1].lower()
+            if summary_format not in {"text", "markdown", "json"}:
+                display_error("Invalid summary format. Use text, markdown, or json.")
+                return
+            del tokens[index : index + 2]
         if tokens and tokens[0] in {"--plan", "--dry-run"}:
             if len(tokens) < 2:
                 display_error("Provide a request string after --plan or --dry-run.")
@@ -61,7 +75,11 @@ class DesktopCommand(BaseCommand):
             display_error("No workspace open. Use /workspace open <name> first.")
             return
 
-        controller = DesktopOpsController(app, mode=app.desktop_ops_mode)
+        controller = DesktopOpsController(
+            app,
+            mode=app.desktop_ops_mode,
+            summary_format=summary_format,
+        )
         result = await controller.run(args)
         app.last_action_summary = result.summary
         app.last_action_status = result.status

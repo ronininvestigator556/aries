@@ -17,6 +17,14 @@ def test_streaming_output_repetition_condensed() -> None:
     assert second == "[no new output]"
 
 
+def test_streaming_output_errors_never_condensed() -> None:
+    condenser = OutputCondenser(max_bytes=200, max_lines=5)
+    first = condenser.condense("ERROR: failed to connect")
+    second = condenser.condense("ERROR: failed to connect")
+    assert first == "ERROR: failed to connect"
+    assert second == "ERROR: failed to connect"
+
+
 def test_streaming_output_truncates_display_and_preserves_raw(tmp_path: Path) -> None:
     raw_output = "line1\nline2\nline3\nline4\n"
     condenser = OutputCondenser(max_bytes=20, max_lines=2)

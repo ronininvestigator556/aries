@@ -332,15 +332,26 @@ class PolicyCommand(BaseCommand):
             display_error("No policy trace recorded yet.")
             return
 
+        paths_validated = trace.get("paths_validated") or {}
+        path_cached = any(entry.get("cached") for entry in paths_validated.values())
+        cached = bool(trace.get("cached"))
+        cache_sources: list[str] = []
+        if cached:
+            cache_sources.append("policy")
+        if path_cached:
+            cache_sources.append("path")
+
         table = Table.grid(padding=(0, 1))
         table.add_row("Tool:", str(trace.get("tool_id", "unknown")))
         table.add_row("Risk level:", str(trace.get("risk_level", trace.get("risk", "unknown"))))
-        table.add_row("Path validation:", json.dumps(trace.get("paths_validated", {})))
+        table.add_row("Path validation:", json.dumps(paths_validated))
         table.add_row("Mode:", str(trace.get("mode", "unknown")))
         table.add_row("Approval required:", "yes" if trace.get("approval_required") else "no")
         table.add_row("Approval reason:", str(trace.get("approval_reason", "unknown")))
         table.add_row("Approved:", "yes" if trace.get("approval_result") else "no")
         table.add_row("Allowlist match:", "yes" if trace.get("allowlist_match") else "no")
         table.add_row("Denylist match:", "yes" if trace.get("denylist_match") else "no")
+        table.add_row("Cached:", "yes" if cached else "no")
+        table.add_row("Cache source:", ", ".join(cache_sources) if cache_sources else "none")
 
         console.print(Panel(table, title="Policy trace", border_style="cyan"))

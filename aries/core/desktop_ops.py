@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass, field
+from hashlib import sha256
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any
 
 from aries.config import DesktopOpsConfig
 from aries.core.desktop_recipes import DesktopRecipeRegistry, RecipeStep, recipe_prefix
+from aries.core.desktop_summary import SummaryBuilder, SummaryOutcome
 from aries.core.file_edit import FileEditPipeline
 from aries.core.message import ToolCall
 from aries.core.workspace import resolve_and_validate_path
@@ -51,6 +53,8 @@ class ProcessHandle:
     started_at: datetime
     last_output_at: datetime
     last_output: str = ""
+    raw_output_path: Path | None = None
+    output_condenser: "OutputCondenser | None" = None
 
 
 @dataclass
@@ -65,6 +69,8 @@ class RunContext:
     audit_log: list[dict[str, Any]] = field(default_factory=list)
     step_index: int = 0
     allowed_roots: list[Path] = field(default_factory=list)
+    policy_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
+    path_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -91,6 +97,7 @@ class DesktopOpsController:
     async def run(self, goal: str) -> DesktopOpsResult:
         context = self._build_context(goal)
         artifacts: list[dict[str, Any]] = []
+        self._update_desktop_status(context, recipe=None)
 
         system_prompt = self._build_system_prompt()
         messages = [
@@ -104,11 +111,11 @@ class DesktopOpsController:
                 display_info("Desktop Ops plan:\n" + plan)
             proceed = await get_user_input("Proceed with this plan? [y/N]: ")
             if proceed.strip().lower() not in {"y", "yes"}:
-                return DesktopOpsResult(
-                    status="stopped",
-                    summary="Desktop Ops stopped before execution.",
-                    audit_log=context.audit_log,
-                    artifacts=artifacts,
+                return await self._finalize(
+                    context,
+                    "stopped",
+                    "Desktop Ops stopped before execution.",
+                    artifacts,
                 )
 
         tool_definitions = self._tool_definitions()
@@ -162,7 +169,12 @@ class DesktopOpsController:
                     messages.append({"role": "user", "content": answer})
                     continue
                 display_warning("Desktop Ops halted: no actionable tool call or completion signal.")
-                return await self._finalize(context, "stopped", "Desktop Ops stopped without completion.", artifacts)
+                return await self._finalize(
+                    context,
+                    "stopped",
+                    "Desktop Ops stopped without completion.",
+                    artifacts,
+                )
 
             tool_calls = self.app.conversation.parse_tool_calls(tool_calls_raw)
             for call in tool_calls:
@@ -197,6 +209,37 @@ class DesktopOpsController:
             mode=self.mode,
             allowed_roots=allowed_roots,
         )
+
+    async def plan(self, goal: str, *, dry_run: bool = False) -> tuple[str, list[dict[str, Any]]]:
+        context = self._build_context(goal)
+        self._update_desktop_status(context, recipe=None)
+        recipe_match = self.recipe_registry.match_goal(goal, context)
+        plan = None
+        recipe_name = None
+        if recipe_match:
+            recipe_name = recipe_match.name
+            plan = self.recipe_registry.plan(recipe_match.name, recipe_match.arguments, context)
+            context.audit_log.append(
+                {
+                    "event": "recipe_plan",
+                    "recipe": recipe_match.name,
+                    "steps": [
+                        {
+                            "name": step.name,
+                            "tool": step.tool_name,
+                            "description": step.description,
+                        }
+                        for step in plan.steps
+                    ],
+                }
+            )
+        plan_output = self._format_plan_output(context, plan, recipe_name=recipe_name)
+
+        if dry_run and plan:
+            await self._run_dry_run_probes(context, plan)
+
+        self._update_desktop_status(context, recipe=None)
+        return plan_output, context.audit_log
 
     def _build_system_prompt(self) -> str:
         return (
@@ -263,6 +306,7 @@ class DesktopOpsController:
 
     async def _execute_recipe(self, context: RunContext, call: ToolCall) -> dict[str, Any]:
         recipe = call.name[len(recipe_prefix()) :]
+        self._update_desktop_status(context, recipe=recipe)
         try:
             plan = self.recipe_registry.plan(recipe, call.arguments, context)
         except Exception as exc:
@@ -383,6 +427,7 @@ class DesktopOpsController:
                 artifacts,
             )
         summary = plan.summary or "Recipe completed."
+        self._update_desktop_status(context, recipe=None)
         return self._tool_message(call.id, call.name, True, summary, artifacts)
 
     def _resolve_recipe_tool(self, step: RecipeStep) -> tuple[Any | None, Any | None, str | None]:
@@ -416,8 +461,11 @@ class DesktopOpsController:
             process_id=str(process_id),
             started_at=datetime.now(),
             last_output_at=datetime.now(),
+            output_condenser=OutputCondenser(),
         )
+        self._initialize_process_artifact(context, handle)
         context.active_processes[handle.process_id] = handle
+        self._update_desktop_status(context, recipe=None)
 
         read_tool_id, read_tool = self._find_process_reader()
         if not read_tool:
@@ -439,9 +487,18 @@ class DesktopOpsController:
             if output:
                 handle.last_output = output
                 handle.last_output_at = datetime.now()
+                self._append_process_output(handle, output)
+                display_output = self._condense_process_output(handle, output)
                 context.audit_log.append(
-                    {"event": "process_output", "process_id": handle.process_id, "output": output}
+                    {
+                        "event": "process_output",
+                        "process_id": handle.process_id,
+                        "output": display_output,
+                        "raw_artifact": str(handle.raw_output_path) if handle.raw_output_path else None,
+                    }
                 )
+                if display_output:
+                    display_info(f"Process {handle.process_id}: {display_output}")
             idle = datetime.now() - handle.last_output_at
             if idle.total_seconds() > poll_cfg.max_idle_seconds:
                 stalled = True
@@ -466,10 +523,6 @@ class DesktopOpsController:
         )
         result, audit = await self.app._run_tool(tool, call, tool_id)
         if result.success:
-            truncated, truncated_flag = self._truncate_output(result.content)
-            if truncated_flag:
-                summary = self._summarize_output(result.content)
-                return f"{truncated}\n{summary}"
             return result.content
         return result.error or ""
 
@@ -517,6 +570,8 @@ class DesktopOpsController:
                 "error": result.error,
             }
         )
+        context.active_processes.pop(handle.process_id, None)
+        self._update_desktop_status(context, recipe=None)
 
     def _find_process_reader(self) -> tuple[Any | None, Any | None]:
         for name in ("read_process_output", "process_read", "read_process"):
@@ -543,6 +598,8 @@ class DesktopOpsController:
         audit: dict[str, Any],
         risk: DesktopRisk,
         approval_reason: str,
+        *,
+        probe: bool = False,
     ) -> None:
         entry = {
             "event": "tool_call",
@@ -552,6 +609,7 @@ class DesktopOpsController:
             "success": result.success,
             "error": result.error,
             "audit": audit,
+            "probe": probe,
         }
         context.audit_log.append(entry)
 
@@ -564,12 +622,30 @@ class DesktopOpsController:
         *,
         recipe: str | None = None,
         step: str | None = None,
+        probe: bool = False,
     ) -> tuple[ToolResult, dict[str, Any], dict[str, Any]]:
-        risk = self._classify_risk(tool, call.arguments)
-        paths_validated = self._validate_paths(context, tool, call.arguments)
-        approval_required = self._requires_approval(risk, tool, call.arguments) or self._requires_path_override(
-            context, tool, call.arguments
-        )
+        policy_cache_key = self._policy_cache_key(context, tool_id, tool, call.arguments)
+        cached = context.policy_cache.get(policy_cache_key)
+        if cached:
+            risk = DesktopRisk(cached["risk"])
+            paths_validated = self._mark_cached_paths(cached["paths_validated"])
+            approval_required = cached["approval_required"]
+            allowlist_match = cached["allowlist_match"]
+            policy_cached = True
+        else:
+            risk = self._classify_risk(tool, call.arguments)
+            paths_validated = self._validate_paths(context, tool, call.arguments)
+            approval_required = self._requires_approval(risk, tool, call.arguments) or self._requires_path_override(
+                context, tool, call.arguments
+            )
+            allowlist_match = self._allowlisted(tool, call.arguments)
+            context.policy_cache[policy_cache_key] = {
+                "risk": risk.value,
+                "approval_required": approval_required,
+                "allowlist_match": allowlist_match,
+                "paths_validated": paths_validated,
+            }
+            policy_cached = False
         start_time = datetime.now().isoformat()
         approved, approval_reason, allowed_paths = await self._check_approval(
             context, risk, tool, call.arguments
@@ -586,10 +662,12 @@ class DesktopOpsController:
             "approval_result": approved,
             "approval_reason": approval_reason,
             "paths_validated": paths_validated,
-            "allowlist_match": self._allowlisted(tool, call.arguments),
+            "allowlist_match": allowlist_match,
             "denylist_match": False,
             "start_time": start_time,
             "end_time": None,
+            "cached": policy_cached,
+            "probe": probe,
         }
         context.audit_log.append(policy_entry)
         self.app.last_policy_trace = policy_entry
@@ -607,7 +685,16 @@ class DesktopOpsController:
             tool_id,
             allowed_paths=allowed_paths,
         )
-        self._record_tool_audit(context, tool, call, tool_result, audit, risk, approval_reason)
+        self._record_tool_audit(
+            context,
+            tool,
+            call,
+            tool_result,
+            audit,
+            risk,
+            approval_reason,
+            probe=probe,
+        )
         policy_entry["end_time"] = datetime.now().isoformat()
         return tool_result, audit, policy_entry
 
@@ -692,15 +779,8 @@ class DesktopOpsController:
         return False
 
     def _path_outside_workspace(self, context: RunContext, value: str) -> bool:
-        try:
-            resolve_and_validate_path(
-                value,
-                workspace=self.app.workspace.current,
-                allowed_paths=context.allowed_roots,
-            )
-            return False
-        except Exception:
-            return True
+        result = self._cached_path_validation(context, value)
+        return not result.get("allowed", False)
 
     async def _request_path_override(self, context: RunContext, tool: Any, args: dict[str, Any]) -> bool:
         prompt = f"Path outside workspace requested by {getattr(tool, 'qualified_id', tool.name)}. Allow? [y/N]: "
@@ -742,16 +822,8 @@ class DesktopOpsController:
             value = args.get(param)
             if not value:
                 continue
-            try:
-                resolved = resolve_and_validate_path(
-                    value,
-                    workspace=self.app.workspace.current,
-                    allowed_paths=self._allowed_roots(),
-                    denied_paths=getattr(self.app.tool_policy, "denied_paths", None),
-                )
-                results[param] = {"value": value, "resolved": str(resolved), "allowed": True}
-            except Exception as exc:
-                results[param] = {"value": value, "allowed": False, "error": str(exc)}
+            cached = self._cached_path_validation(context, value)
+            results[param] = {**cached, "value": value}
         return results
 
     def _classify_risk(self, tool: Any, args: dict[str, Any]) -> DesktopRisk:
@@ -778,9 +850,18 @@ class DesktopOpsController:
         artifacts: list[dict[str, Any]],
     ) -> DesktopOpsResult:
         run_log_path = self._write_audit_log(context)
+        outcome = self._summary_outcome(status, summary)
+        summary_text = SummaryBuilder(
+            mode=context.mode.value,
+            audit_entries=context.audit_log,
+            artifacts=artifacts,
+            artifact_registry=self.app.workspace.artifacts if self.app.workspace else None,
+            outcome=outcome,
+        ).build()
+        self._update_desktop_status(context, recipe=None)
         return DesktopOpsResult(
             status=status,
-            summary=summary,
+            summary=summary_text,
             audit_log=context.audit_log,
             artifacts=artifacts,
             run_log_path=run_log_path,
@@ -879,3 +960,273 @@ class DesktopOpsController:
     def _summarize_output(self, text: str, lines: int = 20) -> str:
         tail = "\n".join(text.splitlines()[-lines:])
         return f"(output truncated; last {lines} lines)\n{tail}"
+
+    def _format_plan_output(
+        self,
+        context: RunContext,
+        plan: Any | None,
+        *,
+        recipe_name: str | None,
+    ) -> str:
+        lines = ["Desktop Ops plan", f"Recipe: {recipe_name or 'manual plan'}"]
+        if not plan:
+            lines.append("Steps: (none)")
+            return "\n".join(lines)
+        lines.append("Steps:")
+        for index, step in enumerate(plan.steps, start=1):
+            tool_id, tool, _ = self.app._resolve_tool_reference(step.tool_name)
+            tool_label = getattr(tool_id, "qualified", step.tool_name)
+            args = step.arguments(context, None) if callable(step.arguments) else step.arguments
+            sanitized = self.app._sanitize_arguments(args)
+            risk = self._classify_risk(tool, args) if tool else DesktopRisk.READ_ONLY
+            approval_required = False
+            paths = {}
+            if tool:
+                paths = self._validate_paths(context, tool, args)
+                approval_required = self._requires_approval(risk, tool, args) or self._requires_path_override(
+                    context, tool, args
+                )
+            lines.append(
+                f"  {index}. tool={tool_label} risk={risk.value} approval_required={'yes' if approval_required else 'no'}"
+            )
+            lines.append(f"     args={sanitized}")
+            if paths:
+                lines.append("     paths:")
+                for param in sorted(paths):
+                    entry = paths[param]
+                    resolved = entry.get("resolved") or entry.get("value")
+                    in_workspace = self._path_in_workspace(context, resolved)
+                    allowed = "yes" if entry.get("allowed") else "no"
+                    lines.append(
+                        f"       - {param}: {resolved} (allowed={allowed}, in_workspace={in_workspace})"
+                    )
+            else:
+                lines.append("     paths: (none)")
+        return "\n".join(lines)
+
+    async def _run_dry_run_probes(self, context: RunContext, plan: Any) -> None:
+        for step in plan.steps:
+            tool_id, tool, error = self.app._resolve_tool_reference(step.tool_name)
+            if error or not tool:
+                context.audit_log.append(
+                    {
+                        "event": "probe_skipped",
+                        "step": step.name,
+                        "reason": error or "tool_unavailable",
+                    }
+                )
+                continue
+            args = step.arguments(context, None) if callable(step.arguments) else step.arguments
+            risk = self._classify_risk(tool, args)
+            if not self._should_probe(tool, args, risk):
+                context.audit_log.append(
+                    {
+                        "event": "probe_skipped",
+                        "step": step.name,
+                        "tool": getattr(tool_id, "qualified", tool.name),
+                        "reason": "non_read_only",
+                    }
+                )
+                continue
+            tool_call = ToolCall(
+                id=f"probe:{step.name}",
+                name=getattr(tool_id, "qualified", tool.name),
+                arguments=args,
+            )
+            await self._execute_tool_call_with_policy(
+                context,
+                tool,
+                tool_id,
+                tool_call,
+                recipe="dry_run",
+                step=step.name,
+                probe=True,
+            )
+
+    def _should_probe(self, tool: Any, args: dict[str, Any], risk: DesktopRisk) -> bool:
+        if risk == DesktopRisk.READ_ONLY:
+            return True
+        if risk in {DesktopRisk.EXEC_USERSPACE, DesktopRisk.EXEC_PRIVILEGED}:
+            return self._is_safe_probe_command(tool, args)
+        return False
+
+    def _is_safe_probe_command(self, tool: Any, args: dict[str, Any]) -> bool:
+        command = (args.get("command") or "").strip()
+        if not command:
+            return False
+        safe_prefixes = ("pwd", "ls", "git status")
+        if not any(command == prefix or command.startswith(prefix + " ") for prefix in safe_prefixes):
+            return False
+        return self._allowlisted(tool, args)
+
+    def _path_in_workspace(self, context: RunContext, value: str | None) -> str:
+        if not value or not self.app.workspace.current:
+            return "unknown"
+        try:
+            resolved = Path(value).expanduser().resolve()
+            workspace_root = self.app.workspace.current.root.expanduser().resolve()
+            return "yes" if resolved.is_relative_to(workspace_root) else "no"
+        except Exception:
+            return "unknown"
+
+    def _cached_path_validation(self, context: RunContext, value: str) -> dict[str, Any]:
+        key = self._path_cache_key(context, value)
+        cached = context.path_cache.get(key)
+        if cached:
+            return {**cached, "cached": True}
+        try:
+            resolved = resolve_and_validate_path(
+                value,
+                workspace=self.app.workspace.current,
+                allowed_paths=self._allowed_roots(),
+                denied_paths=getattr(self.app.tool_policy, "denied_paths", None),
+            )
+            result = {"resolved": str(resolved), "allowed": True, "cached": False}
+        except Exception as exc:
+            result = {"allowed": False, "error": str(exc), "cached": False}
+        context.path_cache[key] = result
+        return result
+
+    def _path_cache_key(self, context: RunContext, value: str) -> str:
+        allowed_roots = [str(path) for path in context.allowed_roots]
+        try:
+            resolved = str(Path(value).expanduser().resolve())
+        except Exception:
+            resolved = value
+        payload = json.dumps({"path": resolved, "roots": allowed_roots}, sort_keys=True)
+        return sha256(payload.encode("utf-8")).hexdigest()
+
+    def _policy_cache_key(self, context: RunContext, tool_id: Any, tool: Any, args: dict[str, Any]) -> str:
+        allowlist_version = self._stable_hash(self.config.auto_exec_allowlist)
+        denylist = getattr(self.app.tool_policy, "denied_paths", None) or []
+        denylist_version = self._stable_hash(denylist)
+        allowed_roots_version = self._stable_hash([str(p) for p in context.allowed_roots])
+        payload = {
+            "tool": getattr(tool_id, "qualified", tool.name),
+            "args": self._normalize_args(args),
+            "mode": self.mode.value,
+            "allowlist": allowlist_version,
+            "denylist": denylist_version,
+            "allowed_roots": allowed_roots_version,
+        }
+        return sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _normalize_args(args: dict[str, Any]) -> dict[str, Any]:
+        def _normalize(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {k: _normalize(v) for k, v in sorted(value.items())}
+            if isinstance(value, list):
+                return [_normalize(v) for v in value]
+            return value
+
+        return _normalize(args)
+
+    @staticmethod
+    def _stable_hash(values: Any) -> str:
+        payload = json.dumps(values, sort_keys=True, default=str)
+        return sha256(payload.encode("utf-8")).hexdigest()
+
+    def _summary_outcome(self, status: str, reason: str) -> SummaryOutcome:
+        if status == "completed":
+            return SummaryOutcome(status="success")
+        if status == "failed":
+            return SummaryOutcome(status="blocked", reason=reason)
+        return SummaryOutcome(status="partial", reason=reason)
+
+    @staticmethod
+    def _mark_cached_paths(paths: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        return {key: {**value, "cached": True} for key, value in paths.items()}
+
+    def _initialize_process_artifact(self, context: RunContext, handle: ProcessHandle) -> None:
+        workspace = self.app.workspace.current
+        if not workspace:
+            return
+        safe_id = "".join(ch for ch in handle.process_id if ch.isalnum() or ch in {"-", "_"})
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = workspace.artifact_dir / f"process_{safe_id}_{timestamp}.log"
+        path.write_text("", encoding="utf-8")
+        handle.raw_output_path = path
+        self.app.workspace.register_artifact_hint(
+            {
+                "path": str(path),
+                "type": "log",
+                "name": path.name,
+                "description": "Process output log",
+            },
+            source="desktop_ops",
+        )
+        context.audit_log.append(
+            {
+                "event": "artifact",
+                "artifact": {
+                    "path": str(path),
+                    "type": "log",
+                    "name": path.name,
+                    "description": "Process output log",
+                },
+            }
+        )
+
+    def _append_process_output(self, handle: ProcessHandle, output: str) -> None:
+        if not handle.raw_output_path:
+            return
+        handle.raw_output_path.parent.mkdir(parents=True, exist_ok=True)
+        with handle.raw_output_path.open("a", encoding="utf-8") as file:
+            file.write(output)
+            if not output.endswith("\n"):
+                file.write("\n")
+
+    def _condense_process_output(self, handle: ProcessHandle, output: str) -> str:
+        condenser = handle.output_condenser or OutputCondenser()
+        handle.output_condenser = condenser
+        return condenser.condense(output)
+
+    def _update_desktop_status(self, context: RunContext, *, recipe: str | None) -> None:
+        if not hasattr(self.app, "desktop_ops_state"):
+            return
+        if recipe is not None:
+            self.app.desktop_ops_state["recipe"] = recipe
+        self.app.desktop_ops_state["cwd"] = str(context.cwd)
+        self.app.desktop_ops_state["active_processes"] = len(context.active_processes)
+
+
+class OutputCondenser:
+    """Condense streaming output for display while keeping raw logs."""
+
+    def __init__(self, *, max_bytes: int = 2000, max_lines: int = 20) -> None:
+        self.max_bytes = max_bytes
+        self.max_lines = max_lines
+        self._last_chunk: str | None = None
+
+    def condense(self, output: str) -> str:
+        if not output:
+            return ""
+        if output == self._last_chunk:
+            return "[no new output]"
+        self._last_chunk = output
+
+        lines = output.splitlines()
+        filtered_lines = [line for line in lines if line.strip()]
+        if filtered_lines and all(self._is_progress_line(line) for line in filtered_lines):
+            return "[progress output]"
+
+        condensed = output
+        if len(lines) > self.max_lines:
+            condensed = "\n".join(lines[: self.max_lines])
+            condensed += f"\n...[truncated {len(lines) - self.max_lines} lines]"
+        if len(condensed) > self.max_bytes:
+            condensed = condensed[: self.max_bytes] + "\n...[truncated]"
+        return condensed
+
+    @staticmethod
+    def _is_progress_line(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        spinner_chars = set("|/-\\⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+        if len(stripped) <= 6 and all(char in spinner_chars for char in stripped):
+            return True
+        if "%" in stripped and any(ch in stripped for ch in ("█", "=", "-", ">")):
+            return True
+        return False

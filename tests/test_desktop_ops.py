@@ -72,7 +72,7 @@ async def test_desktop_ops_executes_tool_calls(tmp_path: Path, monkeypatch: pyte
     result = await controller.run("Read the workspace root.")
 
     assert result.status == "completed"
-    assert "completed" in result.summary.lower()
+    assert "success" in result.summary.lower()
 
 
 @pytest.mark.asyncio
@@ -102,4 +102,4 @@ async def test_desktop_ops_denies_path_override(tmp_path: Path, monkeypatch: pyt
     controller = DesktopOpsController(app, mode="commander")
     result = await controller.run("Attempt to read outside workspace.")
 
-    assert "failed" in result.summary.lower()
+    assert "blocked" in result.summary.lower()

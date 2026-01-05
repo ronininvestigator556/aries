@@ -413,8 +413,24 @@ class WorkspaceManager:
             logger.warning("Artifact hint missing path; skipping registration: %s", artifact)
             return None
 
+        path_hint = ref.path
+        if not path_hint.is_absolute() and self.current:
+            candidate = (Path.cwd() / path_hint).expanduser()
+            try:
+                candidate = candidate.resolve(strict=False)
+            except Exception:
+                candidate = None
+            if candidate and candidate.exists():
+                workspace_root = self.current.root.expanduser().resolve()
+                try:
+                    is_under_root = candidate.is_relative_to(workspace_root)
+                except AttributeError:  # pragma: no cover - Python <3.9 compatibility
+                    is_under_root = str(candidate).startswith(str(workspace_root))
+                if is_under_root:
+                    path_hint = candidate
+
         try:
-            path = self.resolve_path(ref.path)
+            path = self.resolve_path(path_hint)
         except FileToolError as exc:
             logger.warning("Artifact outside allowed paths ignored: %s", exc)
             return None

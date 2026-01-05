@@ -55,14 +55,41 @@ tools:
   allow_network: false
   confirmation_required: true
 
+desktop_ops:
+  enabled: true
+  mode: "commander" # guide | commander | strict
+  server_id: "desktop_commander"
+  allowed_roots:
+    - "C:/Users/muram/Documents"
+  auto_exec_allowlist:
+    - "mcp:desktop_commander:start_process:git status"
+    - "mcp:desktop_commander:start_process:python --version"
+  require_approval_for:
+    - "WRITE_DESTRUCTIVE"
+    - "EXEC_PRIVILEGED"
+    - "NETWORK"
+  max_steps: 40
+  max_retries_per_step: 2
+  process_poll:
+    initial_ms: 250
+    max_ms: 2000
+    max_idle_seconds: 30
+    max_total_seconds: 900
+
 # Provider settings
 providers:
   strict_metadata: false
   strict_metadata_max_issues: 25
   mcp:
-    enabled: false
+    enabled: true
     require: false
-    servers: []
+    servers:
+      - id: "desktop_commander"
+        transport: "stdio"
+        command:
+          - "C:/Users/muram/Dev/aries/node_modules/.bin/npx.cmd"
+          - "-y"
+          - "@chriscoletech/desktop-commander-mcp"
 
 # Policy display settings
 policy:

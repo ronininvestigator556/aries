@@ -297,11 +297,10 @@ class Aries:
         servers = mcp_cfg.servers if mcp_cfg else []
         server = select_desktop_commander_server(servers, desktop_cfg.server_id)
         if not server:
-            self._warn_once(
-                "desktop_ops:no_server",
-                f"Desktop Ops enabled but MCP server '{desktop_cfg.server_id}' not configured.",
+            raise ConfigError(
+                f"Desktop Ops requires MCP server '{desktop_cfg.server_id}'. "
+                "Binary not found or not executable."
             )
-            return
         try:
             provider = DesktopCommanderProvider(
                 server,
@@ -309,11 +308,10 @@ class Aries:
                 strict=bool(getattr(providers_cfg, "strict_metadata", False)),
             )
         except Exception as exc:
-            self._warn_once(
-                f"desktop_ops:{server.id}",
-                f"Desktop Commander MCP server '{server.id}' unavailable; tools skipped ({exc}).",
-            )
-            return
+            raise ConfigError(
+                f"Desktop Ops requires MCP server '{server.id}'. "
+                "Binary not found or not executable."
+            ) from exc
         self.tool_registry.register_provider(provider)
 
     def _status_summary(self, status: MCPServerStatus) -> dict[str, Any]:

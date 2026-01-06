@@ -134,7 +134,12 @@ class OllamaClient:
                 **kwargs,
             )
             if raw:
+                if hasattr(response, "model_dump"):
+                    return response.model_dump()
                 return response
+            
+            if hasattr(response, "message"):
+                return response.message.content
             return response["message"]["content"]
         except ollama.ResponseError as e:
             if "not found" in str(e).lower():

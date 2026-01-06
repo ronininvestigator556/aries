@@ -160,6 +160,10 @@ class MCPServerConfig(BaseModel):
     """Configuration for a single MCP server."""
 
     id: str
+    transport: str = Field(
+        default="stdio",
+        description="Communication transport: stdio (JSON-RPC) | http (REST) | command (CLI)",
+    )
     command: list[str] | None = Field(
         default=None, description="Command to start the MCP server process"
     )

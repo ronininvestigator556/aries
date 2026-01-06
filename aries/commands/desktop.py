@@ -51,7 +51,11 @@ class DesktopCommand(BaseCommand):
             )
             return
 
-        tokens = shlex.split(args)
+        try:
+            tokens = shlex.split(args)
+        except ValueError:
+            # Fallback for malformed quotes (e.g. Windows paths ending in \)
+            tokens = []
         summary_format = None
         if "--summary-format" in tokens:
             index = tokens.index("--summary-format")

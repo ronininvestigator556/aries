@@ -14,7 +14,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 MIN_PYTHON = (3, 11)
-MAX_PYTHON = (3, 14)
+MAX_PYTHON = (3, 15)
 
 
 def _ensure_supported_python(version_info: Any | None = None) -> None:
@@ -37,8 +37,8 @@ def _ensure_supported_python(version_info: Any | None = None) -> None:
         detected = ".".join(str(part) for part in current[:3])
         raise RuntimeError(
             "Unsupported Python version: "
-            f"{detected}. ARIES requires Python 3.11-3.13. "
-            "Install Python 3.11, 3.12, or 3.13 and/or use the project virtual environment."
+            f"{detected}. ARIES requires Python 3.11-3.14. "
+            "Install Python 3.11, 3.12, 3.13, or 3.14 and/or use the project virtual environment."
         )
 
 
@@ -297,16 +297,13 @@ class Aries:
         servers = mcp_cfg.servers if mcp_cfg else []
         server = select_desktop_commander_server(servers, desktop_cfg.server_id)
         if not server:
-            self._warn_once(
-                "desktop_ops:no_server",
-                (
-                    f"Desktop Ops enabled but MCP server '{desktop_cfg.server_id}' not configured. "
-                    "Desktop Ops requires a configured provider (desktop_commander or filesystem). "
-                    "Configure in config.yaml. Expected keys: providers.mcp.enabled, "
-                    "providers.mcp.servers[].id, command or url. Example (Windows): "
-                    "providers:\n  mcp:\n    enabled: true\n    servers:\n      - id: desktop_commander\n"
-                    "        command: [\"powershell\", \"-NoLogo\", \"-NoProfile\", \"-Command\", \"desktop-commander\"]"
-                ),
+            raise ConfigError(
+                f"Desktop Ops enabled but MCP server '{desktop_cfg.server_id}' not configured. "
+                "Desktop Ops requires a configured provider (desktop_commander or filesystem). "
+                "Configure in config.yaml. Expected keys: providers.mcp.enabled, "
+                "providers.mcp.servers[].id, command or url. Example (Windows): "
+                "providers:\n  mcp:\n    enabled: true\n    servers:\n      - id: desktop_commander\n"
+                "        command: [\"powershell\", \"-NoLogo\", \"-NoProfile\", \"-Command\", \"desktop-commander\"]"
             )
         try:
             provider = DesktopCommanderProvider(

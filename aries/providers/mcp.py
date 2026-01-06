@@ -224,9 +224,167 @@ class CommandMCPClient:
         return proc.stdout.strip()
 
 
+class StdioMCPClient:
+    """MCP client communicating via JSON-RPC over stdio."""
+
+    def __init__(self, config: MCPServerConfig) -> None:
+        if not config.command:
+            raise MCPClientError("Stdio MCP client requires a command")
+        self.server_id = config.id
+        self.command = list(config.command)
+        self.env = os.environ.copy()
+        if config.env:
+            self.env.update(config.env)
+        self.timeout = config.timeout_seconds
+        self._process: subprocess.Popen | None = None
+        self._request_id = 0
+
+    def connect(self) -> None:
+        """Start the process and perform the MCP handshake."""
+        try:
+            self._process = subprocess.Popen(
+                self.command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=self.env,
+                text=True,
+                bufsize=0,  # Unbuffered
+            )
+        except Exception as exc:
+            raise MCPClientError(f"Failed to start process: {exc}") from exc
+
+        # MCP Handshake: 1. initialize
+        init_result = self._call_json_rpc("initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "aries", "version": "0.1.0"}
+        })
+        
+        # MCP Handshake: 2. initialized notification
+        self._notify_json_rpc("notifications/initialized", {})
+
+    def list_tools(self) -> tuple[list[MCPToolDefinition], str | None]:
+        response = self._call_json_rpc("tools/list", {})
+        tools_raw = response.get("tools", [])
+        
+        tools: list[MCPToolDefinition] = []
+        for item in tools_raw:
+            if not isinstance(item, dict):
+                continue
+            tools.append(
+                MCPToolDefinition(
+                    name=str(item.get("name") or ""),
+                    description=str(item.get("description") or ""),
+                    parameters=item.get("inputSchema") or {}, # MCP uses inputSchema
+                    risk=item.get("risk"),
+                    requires_network=item.get("requires_network"),
+                    requires_shell=item.get("requires_shell"),
+                    mutates_state=item.get("mutates_state"),
+                    emits_artifacts=item.get("emits_artifacts"),
+                    path_params=tuple(item.get("path_params") or ()),
+                    metadata=item.get("metadata") or {},
+                )
+            )
+        return tools, "1.0" # Version not always in tools/list response
+
+    def invoke(self, tool_name: str, arguments: dict[str, Any]) -> MCPToolCallResult:
+        try:
+            result = self._call_json_rpc("tools/call", {
+                "name": tool_name,
+                "arguments": arguments
+            })
+            
+            content_list = result.get("content", [])
+            text_content = ""
+            is_error = result.get("isError", False)
+            
+            for item in content_list:
+                if item.get("type") == "text":
+                    text_content += item.get("text", "")
+            
+            return MCPToolCallResult(
+                success=not is_error,
+                content=text_content,
+                error=text_content if is_error else None,
+                metadata=None,
+                artifacts=None,
+            )
+        except MCPClientError as e:
+            return MCPToolCallResult(
+                success=False,
+                content="",
+                error=str(e),
+            )
+
+    def _call_json_rpc(self, method: str, params: dict[str, Any]) -> Any:
+        if not self._process or self._process.poll() is not None:
+             raise MCPClientError("Server process is not running")
+
+        self._request_id += 1
+        req_id = self._request_id
+        request = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": method,
+            "params": params
+        }
+        
+        try:
+            request_str = json.dumps(request) + "\n"
+            if self._process.stdin:
+                self._process.stdin.write(request_str)
+                self._process.stdin.flush()
+        except Exception as e:
+            raise MCPClientError(f"Failed to send request: {e}") from e
+
+        # Read until we get the response for this ID
+        start_time = time.time()
+        while True:
+            if time.time() - start_time > self.timeout:
+                raise MCPClientError(f"Timeout waiting for response to {method}")
+            
+            if self._process.poll() is not None:
+                stderr = self._process.stderr.read() if self._process.stderr else ""
+                raise MCPClientError(f"Process exited unexpectedly. Stderr: {stderr}")
+
+            line = self._process.stdout.readline()
+            if not line:
+                continue
+                
+            try:
+                msg = json.loads(line)
+                if msg.get("id") == req_id:
+                    if "error" in msg:
+                        error = msg["error"]
+                        raise MCPClientError(f"RPC Error {error.get('code')}: {error.get('message')}")
+                    return msg.get("result")
+                # Ignore notifications or other responses for now
+            except json.JSONDecodeError:
+                # Log or ignore malformed lines
+                pass
+
+    def _notify_json_rpc(self, method: str, params: dict[str, Any]) -> None:
+        if not self._process or self._process.stdin is None:
+            return
+        
+        request = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params
+        }
+        try:
+            self._process.stdin.write(json.dumps(request) + "\n")
+            self._process.stdin.flush()
+        except Exception:
+            pass
+
+
 def default_client_factory(config: MCPServerConfig) -> MCPClient:
     """Create an MCP client based on server configuration."""
-    if config.url:
+    if config.transport == "stdio":
+        return StdioMCPClient(config)
+    if config.transport == "http" or config.url:
         return HttpMCPClient(config)
     return CommandMCPClient(config)
 

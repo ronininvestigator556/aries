@@ -1,0 +1,27 @@
+{
+  "name": "aries",
+  "version": "1.0.0",
+  "description": "counter surveillance tool",
+  "homepage": "https://github.com/ronininvestigator556/aries#readme",
+  "bugs": {
+    "url": "https://github.com/ronininvestigator556/aries/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ronininvestigator556/aries.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "aries.py",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@chriscoletech/desktop-commander-mcp": "^0.2.12"
+  }
+}

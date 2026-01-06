@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from dataclasses import dataclass, field
-from hashlib import sha256
 from datetime import datetime
 from enum import Enum
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +56,7 @@ class ProcessHandle:
     last_output_at: datetime
     last_output: str = ""
     raw_output_path: Path | None = None
-    output_condenser: "OutputCondenser | None" = None
+    output_condenser: OutputCondenser | None = None
 
 
 @dataclass
@@ -108,7 +109,7 @@ class DesktopOpsController:
         self._update_desktop_status(context, recipe=None)
 
         system_prompt = self._build_system_prompt()
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": goal},
         ]
@@ -138,6 +139,8 @@ class DesktopOpsController:
         tool_definitions = self._tool_definitions()
         retry_counts: dict[str, int] = {}
         recipe_attempted = False
+        nudge_count = 0
+        max_nudges = 3
 
         preferred_recipe = self.recipe_registry.match_goal(goal, context)
         if preferred_recipe:
@@ -175,10 +178,25 @@ class DesktopOpsController:
                 raw=True,
             )
             message_payload = response.get("message", {}) if isinstance(response, dict) else {}
+            content = (message_payload.get("content") or "").strip()
             tool_calls_raw = message_payload.get("tool_calls") or []
 
+            # Append assistant message to history immediately to maintain context
+            messages.append(message_payload)
+
+            context.audit_log.append(
+                {
+                    "event": "llm_response",
+                    "step": step_index,
+                    "content": content,
+                    "tool_calls": tool_calls_raw,
+                }
+            )
+
             if not tool_calls_raw:
-                content = (message_payload.get("content") or "").strip()
+                if content:
+                    display_info(f"Assistant: {content}")
+
                 if self._is_done(content):
                     summary = content or "Desktop Ops completed."
                     return await self._finalize(context, "completed", summary, artifacts)
@@ -203,6 +221,22 @@ class DesktopOpsController:
                         "No actionable tool call. Try /desktop --plan and consider switching models.",
                         artifacts,
                     )
+
+                # If we have content but no tool calls and it's not a question/done,
+                # give the model a chance to self-correct with a nudge.
+                if content and nudge_count < max_nudges:
+                    nudge_count += 1
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            "You provided text but no tool calls. Please use the available tools to complete the request, "
+                            "or say DONE if finished. IMPORTANT: Use the actual tool calling mechanism (JSON tool calls), "
+                            "do not just write markdown code blocks."
+                        )
+                    })
+                    display_warning(f"No tool call provided; nudging model (attempt {nudge_count}/{max_nudges})...")
+                    continue
+
                 display_warning("Desktop Ops halted: no actionable tool call or completion signal.")
                 return await self._finalize(
                     context,
@@ -268,6 +302,13 @@ class DesktopOpsController:
                     ],
                 }
             )
+
+        if not plan:
+            manual_plan_text = await self._propose_plan(goal)
+            plan_output = f"Desktop Ops plan\nRecipe: manual plan\n\n{manual_plan_text}"
+            self._update_desktop_status(context, recipe=None)
+            return plan_output, context.audit_log
+
         plan_output = self._format_plan_output(
             context,
             plan,
@@ -285,8 +326,12 @@ class DesktopOpsController:
         return (
             "You are Desktop Ops inside ARIES. "
             f"Active mode: {self.mode.value}. "
+            "Your goal is to complete the user's request using the available tools. "
             "Operate in a plan→act→observe→adjust loop. "
             "Infer the next obvious step when unambiguous. "
+            "IMPORTANT: Use tools for every single action (file system, command execution, etc.). "
+            "Do not just describe what you would do. If you need to list files, call the list_directory tool. "
+            "If you need to read a file, call the read_file tool. "
             "Never assume success; always read tool output before proceeding. "
             "Self-correct common failures (missing dependencies, wrong working directory, "
             "virtualenv issues, permissions). "
@@ -993,8 +1038,8 @@ class DesktopOpsController:
     def _is_done(self, content: str) -> bool:
         if not content:
             return False
-        upper = content.strip().upper()
-        return upper.startswith("DONE") or upper.startswith("COMPLETE")
+        upper = content.upper()
+        return bool(re.search(r"\b(DONE|COMPLETE|COMPLETED|FINISHED)\b", upper))
 
     def _extract_question(self, content: str) -> str | None:
         if not content:

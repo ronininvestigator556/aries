@@ -297,9 +297,16 @@ class Aries:
         servers = mcp_cfg.servers if mcp_cfg else []
         server = select_desktop_commander_server(servers, desktop_cfg.server_id)
         if not server:
-            raise ConfigError(
-                f"Desktop Ops requires MCP server '{desktop_cfg.server_id}'. "
-                "Binary not found or not executable."
+            self._warn_once(
+                "desktop_ops:no_server",
+                (
+                    f"Desktop Ops enabled but MCP server '{desktop_cfg.server_id}' not configured. "
+                    "Desktop Ops requires a configured provider (desktop_commander or filesystem). "
+                    "Configure in config.yaml. Expected keys: providers.mcp.enabled, "
+                    "providers.mcp.servers[].id, command or url. Example (Windows): "
+                    "providers:\n  mcp:\n    enabled: true\n    servers:\n      - id: desktop_commander\n"
+                    "        command: [\"powershell\", \"-NoLogo\", \"-NoProfile\", \"-Command\", \"desktop-commander\"]"
+                ),
             )
         try:
             provider = DesktopCommanderProvider(

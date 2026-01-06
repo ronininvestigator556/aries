@@ -106,6 +106,21 @@ class DesktopRecipeRegistry:
             {
                 "type": "function",
                 "function": {
+                    "name": f"{_RECIPE_PREFIX}create_text_file",
+                    "description": "Create or overwrite a text file with deterministic content.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": f"{_RECIPE_PREFIX}build_project",
                     "description": "Build the project using common build commands.",
                     "parameters": {
@@ -140,6 +155,8 @@ class DesktopRecipeRegistry:
             return self._plan_python_bootstrap(args, context)
         if name == "run_tests":
             return self._plan_run_tests(args, context)
+        if name == "create_text_file":
+            return self._plan_create_text_file(args, context)
         if name == "build_project":
             return self._plan_build_project(args, context)
         if name == "log_tail":
@@ -164,7 +181,15 @@ class DesktopRecipeRegistry:
                     arguments={"repo_root": str(context.repo_root)},
                     reason="goal_mentions_bootstrap",
                 )
-        if "test" in normalized and context.repo_root:
+        file_request = _extract_file_request(goal)
+        if file_request:
+            path, content = file_request
+            return RecipeMatch(
+                name="create_text_file",
+                arguments={"path": path, "content": content},
+                reason="goal_mentions_file_write",
+            )
+        if context.repo_root and _mentions_tests(goal):
             return RecipeMatch(
                 name="run_tests",
                 arguments={"repo_root": str(context.repo_root)},
@@ -401,6 +426,33 @@ class DesktopRecipeRegistry:
             )
         return plan
 
+    def _plan_create_text_file(self, args: dict[str, Any], context: RunContext) -> RecipePlan:
+        path = args.get("path")
+        if not path:
+            raise ValueError("path is required")
+        content = str(args.get("content") or "")
+
+        steps = [
+            RecipeStep(
+                name="write_file",
+                tool_name="write_file",
+                arguments={"path": path, "content": content, "mode": "write"},
+                description="Write text file deterministically",
+            ),
+        ]
+
+        def done_criteria(_: RunContext, step_results: list[dict[str, Any]]) -> bool:
+            if not step_results:
+                return False
+            return step_results[-1].get("success", False)
+
+        return RecipePlan(
+            name="create_text_file",
+            steps=steps,
+            done_criteria=done_criteria,
+            summary="Text file created.",
+        )
+
 
 def _extract_repo_url(goal: str) -> str | None:
     match = re.search(r"(https?://\S+|git@[^\s:]+:[^\s]+)", goal)
@@ -422,6 +474,61 @@ def _extract_dest_dir(goal: str) -> str | None:
 def _extract_log_path(goal: str) -> str | None:
     match = re.search(r"(/[^\s]+\.log)", goal)
     return match.group(1) if match else None
+
+
+def _mentions_tests(goal: str) -> bool:
+    normalized = goal.lower()
+    if re.search(r"\bpytest\b", normalized):
+        return True
+    if re.search(r"\btest suite\b", normalized):
+        return True
+    if re.search(r"\b(unit|integration)\s+tests?\b", normalized):
+        return True
+    return bool(re.search(r"\b(run|rerun|execute)\s+(the\s+)?tests?\b", normalized))
+
+
+def _extract_file_request(goal: str) -> tuple[str, str] | None:
+    if not re.search(r"\b(create|write|save)\b", goal, re.IGNORECASE):
+        return None
+    path = _extract_file_path(goal)
+    if not path:
+        return None
+    content = _extract_file_content(goal) or ""
+    return path, content
+
+
+def _extract_file_path(goal: str) -> str | None:
+    match = re.search(
+        r"\b(?:to|at|in|into|path)\s+(\"[^\"]+\"|'[^']+'|[^\s]+)",
+        goal,
+        re.IGNORECASE,
+    )
+    if not match:
+        match = re.search(
+            r"\bfile\s+(?:named\s+)?(\"[^\"]+\"|'[^']+'|[^\s]+)",
+            goal,
+            re.IGNORECASE,
+        )
+    if not match:
+        return None
+    candidate = match.group(1).strip()
+    if candidate.startswith(("\"", "'")) and candidate.endswith(("\"", "'")):
+        candidate = candidate[1:-1]
+    return candidate
+
+
+def _extract_file_content(goal: str) -> str | None:
+    match = re.search(
+        r"\b(?:content|text)\b\s*[:=]?\s*(\"[^\"]+\"|'[^']+')",
+        goal,
+        re.IGNORECASE,
+    )
+    if match:
+        content = match.group(1)
+        if content.startswith(("\"", "'")) and content.endswith(("\"", "'")):
+            return content[1:-1]
+        return content
+    return None
 
 
 def _detect_build_command(root: Path) -> str:

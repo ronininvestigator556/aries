@@ -308,7 +308,6 @@ class Aries:
                     "        command: [\"powershell\", \"-NoLogo\", \"-NoProfile\", \"-Command\", \"desktop-commander\"]"
                 ),
             )
-            return
         try:
             provider = DesktopCommanderProvider(
                 server,
@@ -316,11 +315,10 @@ class Aries:
                 strict=bool(getattr(providers_cfg, "strict_metadata", False)),
             )
         except Exception as exc:
-            self._warn_once(
-                f"desktop_ops:{server.id}",
-                f"Desktop Commander MCP server '{server.id}' unavailable; tools skipped ({exc}).",
-            )
-            return
+            raise ConfigError(
+                f"Desktop Ops requires MCP server '{server.id}'. "
+                "Binary not found or not executable."
+            ) from exc
         self.tool_registry.register_provider(provider)
 
     def _status_summary(self, status: MCPServerStatus) -> dict[str, Any]:

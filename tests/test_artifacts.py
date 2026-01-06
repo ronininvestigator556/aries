@@ -43,6 +43,38 @@ async def test_artifact_hint_registration(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_artifact_hint_resolves_workspace_relative_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_dir = tmp_path / "profiles"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "default.yaml").write_text("name: default\nsystem_prompt: default", encoding="utf-8")
+
+    config = Config()
+    config.profiles.directory = profile_dir
+    config.prompts.directory = tmp_path / "prompts"
+    config.workspace.root = tmp_path / "workspaces"
+    config.workspace.persist_by_default = True
+    config.workspace.default = "demo"
+    config.tools.allowed_paths = [tmp_path]
+    config.tools.confirmation_required = False
+
+    app = Aries(config)
+    monkeypatch.chdir(tmp_path)
+
+    artifact_path = config.workspace.root / "demo" / "artifacts" / "note.txt"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text("artifact data", encoding="utf-8")
+
+    hint_path = Path("workspaces") / "demo" / "artifacts" / "note.txt"
+    record = app.workspace.register_artifact_hint({"path": str(hint_path)})
+
+    assert record is not None
+    assert record["path"] == str(artifact_path.resolve())
+
+
+@pytest.mark.anyio
 async def test_legacy_metadata_path_registers_artifact(tmp_path: Path) -> None:
     profile_dir = tmp_path / "profiles"
     profile_dir.mkdir(parents=True)

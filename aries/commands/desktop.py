@@ -44,6 +44,13 @@ class DesktopCommand(BaseCommand):
             display_success(f"Desktop Ops mode set to {mode}.")
             return
 
+        if not self._has_desktop_tools(app):
+            display_error(
+                "Desktop Ops requires a configured provider (desktop_commander or filesystem). "
+                "Configure in config.yaml."
+            )
+            return
+
         tokens = shlex.split(args)
         summary_format = None
         if "--summary-format" in tokens:
@@ -90,3 +97,13 @@ class DesktopCommand(BaseCommand):
             display_success("Desktop Ops completed.")
         else:
             display_warning(f"Desktop Ops ended with status: {result.status}.")
+
+    @staticmethod
+    def _has_desktop_tools(app: "Aries") -> bool:
+        providers = app.tool_registry.providers
+        if "mcp:desktop" in providers:
+            return True
+        for tool in app.tool_registry.list_tools():
+            if getattr(tool, "uses_filesystem_paths", False):
+                return True
+        return False

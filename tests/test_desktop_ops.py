@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
+import json
 
 import pytest
 from pathlib import Path
@@ -103,3 +104,66 @@ async def test_desktop_ops_denies_path_override(tmp_path: Path, monkeypatch: pyt
     result = await controller.run("Attempt to read outside workspace.")
 
     assert "blocked" in result.summary.lower()
+
+
+@pytest.mark.asyncio
+async def test_desktop_ops_audit_log_paths_resolve(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = Config()
+    config.desktop_ops.enabled = True
+    config.desktop_ops.mode = "commander"
+    config.workspace.root = Path("workspaces")
+    config.prompts.directory = (Path(__file__).resolve().parents[1] / "prompts")
+
+    app = Aries(config)
+    app.workspace.new("demo")
+
+    app.ollama.chat = AsyncMock(return_value={"message": {"content": "DONE: ok"}})
+
+    controller = DesktopOpsController(app, mode="commander")
+    result = await controller.run("No-op.")
+
+    assert result.run_log_path is not None
+    expected_dir = (tmp_path / "workspaces" / "demo" / "artifacts").resolve()
+    assert result.run_log_path.parent.resolve() == expected_dir
+
+    manifest_path = expected_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    audit_record = next(
+        entry for entry in manifest if entry["path"] == str(result.run_log_path.resolve())
+    )
+    assert audit_record["path"].startswith(str(expected_dir))
+
+
+@pytest.mark.asyncio
+async def test_desktop_ops_empty_model_output_uses_recipe_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config()
+    config.desktop_ops.enabled = True
+    config.desktop_ops.mode = "commander"
+    config.workspace.root = tmp_path / "workspaces"
+    config.tools.confirmation_required = False
+
+    app = Aries(config)
+    app.workspace.new("demo")
+
+    app.ollama.chat = AsyncMock(return_value={"message": {"content": ""}})
+
+    controller = DesktopOpsController(app, mode="commander")
+    match_calls = {"count": 0}
+    original_match = controller.recipe_registry.match_goal
+
+    def _match_goal(goal: str, context):
+        match_calls["count"] += 1
+        if match_calls["count"] == 1:
+            return None
+        return original_match(goal, context)
+
+    monkeypatch.setattr(controller.recipe_registry, "match_goal", _match_goal)
+
+    target = app.workspace.current.root / "notes.txt"
+    result = await controller.run(f'Create a text file at "{target}" with content "hello".')
+
+    assert result.status == "completed"
+    assert target.read_text(encoding="utf-8") == "hello"

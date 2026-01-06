@@ -298,7 +298,7 @@ class WorkspaceManager:
     def __init__(self, config: WorkspaceConfig, tools_config: ToolsConfig | None = None) -> None:
         self.config = config
         self.tools_config = tools_config
-        self.root = Path(config.root).expanduser()
+        self.root = Path(config.root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.current: Workspace | None = None
         self.logger: TranscriptLogger | None = None

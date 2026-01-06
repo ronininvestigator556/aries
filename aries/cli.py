@@ -299,7 +299,14 @@ class Aries:
         if not server:
             self._warn_once(
                 "desktop_ops:no_server",
-                f"Desktop Ops enabled but MCP server '{desktop_cfg.server_id}' not configured.",
+                (
+                    f"Desktop Ops enabled but MCP server '{desktop_cfg.server_id}' not configured. "
+                    "Desktop Ops requires a configured provider (desktop_commander or filesystem). "
+                    "Configure in config.yaml. Expected keys: providers.mcp.enabled, "
+                    "providers.mcp.servers[].id, command or url. Example (Windows): "
+                    "providers:\n  mcp:\n    enabled: true\n    servers:\n      - id: desktop_commander\n"
+                    "        command: [\"powershell\", \"-NoLogo\", \"-NoProfile\", \"-Command\", \"desktop-commander\"]"
+                ),
             )
             return
         try:

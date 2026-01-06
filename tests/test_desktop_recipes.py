@@ -52,3 +52,21 @@ def test_python_bootstrap_includes_requested_extras(tmp_path: Path) -> None:
 
     install_step = plan.steps[2]
     assert "-e '.[dev,rag]'" in install_step.arguments["command"]
+
+
+def test_file_creation_request_matches_create_text_file(tmp_path: Path) -> None:
+    config = Config().desktop_ops
+    registry = DesktopRecipeRegistry(config)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    context = _context(tmp_path)
+    context.repo_root = repo_root
+
+    match = registry.match_goal(
+        'Create a text file at "workspaces/test/notes.txt" with content "hello".',
+        context,
+    )
+
+    assert match is not None
+    assert match.name == "create_text_file"

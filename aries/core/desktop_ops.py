@@ -18,6 +18,7 @@ from aries.core.desktop_summary import SummaryBuilder, SummaryOutcome
 from aries.core.file_edit import FileEditPipeline
 from aries.core.message import ToolCall
 from aries.core.workspace import resolve_and_validate_path
+from aries.exceptions import FileToolError
 from aries.tools.base import ToolResult
 from aries.ui.display import display_info, display_warning
 from aries.ui.input import get_user_input
@@ -125,8 +126,18 @@ class DesktopOpsController:
                     artifacts,
                 )
 
+        if not self._has_executable_tools():
+            return await self._finalize(
+                context,
+                "failed",
+                "Desktop Ops requires a configured provider (desktop_commander or filesystem). "
+                "Configure in config.yaml.",
+                artifacts,
+            )
+
         tool_definitions = self._tool_definitions()
         retry_counts: dict[str, int] = {}
+        recipe_attempted = False
 
         preferred_recipe = self.recipe_registry.match_goal(goal, context)
         if preferred_recipe:
@@ -144,6 +155,7 @@ class DesktopOpsController:
                 arguments=preferred_recipe.arguments,
             )
             result = await self._execute_recipe(context, recipe_call)
+            recipe_attempted = True
             artifacts.extend(result.get("artifacts", []))
             if result.get("success"):
                 return await self._finalize(
@@ -175,6 +187,22 @@ class DesktopOpsController:
                     answer = await get_user_input(f"{question} ")
                     messages.append({"role": "user", "content": answer})
                     continue
+                if self.mode == DesktopOpsMode.COMMANDER and not recipe_attempted:
+                    recipe_result = await self._attempt_recipe_fallback(
+                        context,
+                        artifacts,
+                        goal,
+                    )
+                    recipe_attempted = True
+                    if recipe_result:
+                        return recipe_result
+                if self.mode == DesktopOpsMode.GUIDE:
+                    return await self._finalize(
+                        context,
+                        "stopped",
+                        "No actionable tool call. Try /desktop --plan and consider switching models.",
+                        artifacts,
+                    )
                 display_warning("Desktop Ops halted: no actionable tool call or completion signal.")
                 return await self._finalize(
                     context,
@@ -282,6 +310,34 @@ class DesktopOpsController:
         definitions = list(self.app.tool_registry.list_tool_definitions(qualified=True))
         definitions.extend(self.recipe_registry.definitions())
         return definitions
+
+    def _has_executable_tools(self) -> bool:
+        return bool(self.app.tool_registry.list_tools())
+
+    async def _attempt_recipe_fallback(
+        self,
+        context: RunContext,
+        artifacts: list[dict[str, Any]],
+        goal: str,
+    ) -> DesktopOpsResult | None:
+        preferred_recipe = self.recipe_registry.match_goal(goal, context)
+        if not preferred_recipe:
+            return None
+        recipe_call = ToolCall(
+            id="recipe_fallback",
+            name=f"{recipe_prefix()}{preferred_recipe.name}",
+            arguments=preferred_recipe.arguments,
+        )
+        result = await self._execute_recipe(context, recipe_call)
+        artifacts.extend(result.get("artifacts", []))
+        if result.get("success"):
+            return await self._finalize(
+                context,
+                "completed",
+                result.get("message", {}).get("content") or "Desktop Ops completed.",
+                artifacts,
+            )
+        return None
 
     async def _execute_call(self, context: RunContext, call: ToolCall) -> dict[str, Any]:
         if call.name.startswith(recipe_prefix()):
@@ -844,6 +900,21 @@ class DesktopOpsController:
             return DesktopRisk(desktop_risk)
         if getattr(tool, "requires_network", False):
             return DesktopRisk.NETWORK
+        if getattr(tool, "name", "") == "write_file":
+            path = args.get("path")
+            if path:
+                try:
+                    resolved = resolve_and_validate_path(
+                        path,
+                        workspace=self.app.workspace.current,
+                        allowed_paths=self._allowed_roots(),
+                        denied_paths=getattr(self.app.tool_policy, "denied_paths", None),
+                    )
+                    if resolved.exists() or args.get("mode") == "append":
+                        return DesktopRisk.WRITE_DESTRUCTIVE
+                    return DesktopRisk.WRITE_SAFE
+                except FileToolError:
+                    return DesktopRisk.WRITE_DESTRUCTIVE
         risk_level = str(getattr(tool, "risk_level", "read")).lower()
         mutates = bool(getattr(tool, "mutates_state", False))
         if risk_level == "read":
@@ -884,7 +955,9 @@ class DesktopOpsController:
         if not self.app.workspace.current:
             return None
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = self.app.workspace.current.artifact_dir / f"desktop_ops_{timestamp}.json"
+        artifact_dir = self.app.workspace.current.artifact_dir
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        path = artifact_dir / f"desktop_ops_{timestamp}.json"
         payload = {
             "goal": context.goal,
             "mode": context.mode.value,
@@ -1164,6 +1237,7 @@ class DesktopOpsController:
         workspace = self.app.workspace.current
         if not workspace:
             return
+        workspace.artifact_dir.mkdir(parents=True, exist_ok=True)
         safe_id = "".join(ch for ch in handle.process_id if ch.isalnum() or ch in {"-", "_"})
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = workspace.artifact_dir / f"process_{safe_id}_{timestamp}.log"

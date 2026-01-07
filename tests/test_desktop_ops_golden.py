@@ -243,3 +243,70 @@ async def test_desktop_ops_golden_transcript_episodes(
 
         if requires_network:
             assert user_input.call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_desktop_ops_fs_golden_transcript(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config()
+    config.desktop_ops.enabled = True
+    config.desktop_ops.mode = "commander"
+    config.workspace.root = tmp_path / "workspaces"
+    config.tools.confirmation_required = False
+
+    app = Aries(config)
+    app.workspace.new("demo")
+
+    workspace_root = app.workspace.current.root
+    target_path = workspace_root / "note.txt"
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "builtin:fs:list_dir",
+                "arguments": {"path": str(workspace_root)},
+            },
+        },
+        {
+            "id": "call_2",
+            "type": "function",
+            "function": {
+                "name": "builtin:fs:write_text",
+                "arguments": {
+                    "path": str(target_path),
+                    "content": "hello",
+                    "overwrite": True,
+                },
+            },
+        },
+    ]
+
+    app.ollama.chat = AsyncMock(
+        side_effect=[
+            {"message": {"tool_calls": tool_calls}},
+            {"message": {"content": "DONE: listed directory and wrote file"}},
+        ]
+    )
+    monkeypatch.setattr("aries.core.desktop_ops.get_user_input", AsyncMock(return_value="y"))
+
+    controller = DesktopOpsController(app, mode="commander")
+    result = await controller.run("list files then create a note")
+
+    expected = {
+        "tool_calls": ["builtin:fs:list_dir", "builtin:fs:write_text"],
+        "policy": [
+            {"tool_id": "builtin:fs:list_dir", "approval_required": False},
+            {"tool_id": "builtin:fs:write_text", "approval_required": True},
+        ],
+    }
+    tool_events = [entry for entry in result.audit_log if entry.get("event") == "tool_call"]
+    policy_entries = [entry for entry in result.audit_log if entry.get("event") == "policy_check"]
+    assert [event["tool"] for event in tool_events] == expected["tool_calls"]
+
+    policy_by_tool = {entry["tool_id"]: entry for entry in policy_entries}
+    for expected_entry in expected["policy"]:
+        actual = policy_by_tool.get(expected_entry["tool_id"])
+        assert actual is not None
+        assert actual["approval_required"] == expected_entry["approval_required"]

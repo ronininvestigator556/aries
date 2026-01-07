@@ -165,3 +165,24 @@ async def test_path_validation_applies_to_tools_and_file_edit(
     link_path.symlink_to(outside_dir / "target.txt")
     symlink_result = pipeline.apply_patch(str(link_path), diff)
     assert symlink_result.success is False
+
+
+@pytest.mark.asyncio
+async def test_builtin_fs_tool_routes_through_policy(tmp_path: Path) -> None:
+    app = _make_app(tmp_path, [])
+    controller = DesktopOpsController(app, mode="commander")
+    context = controller._build_context("read file")
+
+    target = app.workspace.current.root / "note.txt"
+    target.write_text("hello", encoding="utf-8")
+
+    tool_call = ToolCall(
+        id="call",
+        name="builtin:fs:read_text",
+        arguments={"path": str(target)},
+    )
+    await controller._execute_call(context, tool_call)
+
+    policy_entries = [entry for entry in context.audit_log if entry.get("event") == "policy_check"]
+    assert policy_entries
+    assert any(entry.get("tool_id") == "builtin:fs:read_text" for entry in policy_entries)

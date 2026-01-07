@@ -106,6 +106,23 @@ class DesktopRecipeRegistry:
             {
                 "type": "function",
                 "function": {
+                    "name": f"{_RECIPE_PREFIX}list_directory",
+                    "description": "List files in a directory.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "recursive": {"type": "boolean", "default": False},
+                            "glob": {"type": "string"},
+                            "max_entries": {"type": "integer", "default": 200},
+                        },
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": f"{_RECIPE_PREFIX}create_text_file",
                     "description": "Create or overwrite a text file with deterministic content.",
                     "parameters": {
@@ -157,6 +174,8 @@ class DesktopRecipeRegistry:
             return self._plan_run_tests(args, context)
         if name == "create_text_file":
             return self._plan_create_text_file(args, context)
+        if name == "list_directory":
+            return self._plan_list_directory(args, context)
         if name == "build_project":
             return self._plan_build_project(args, context)
         if name == "log_tail":
@@ -188,6 +207,13 @@ class DesktopRecipeRegistry:
                 name="create_text_file",
                 arguments={"path": path, "content": content},
                 reason="goal_mentions_file_write",
+            )
+        list_request = _extract_list_request(goal)
+        if list_request:
+            return RecipeMatch(
+                name="list_directory",
+                arguments=list_request,
+                reason="goal_mentions_list_directory",
             )
         if context.repo_root and _mentions_tests(goal):
             return RecipeMatch(
@@ -435,8 +461,8 @@ class DesktopRecipeRegistry:
         steps = [
             RecipeStep(
                 name="write_file",
-                tool_name="write_file",
-                arguments={"path": path, "content": content, "mode": "write"},
+                tool_name="builtin:fs:write_text",
+                arguments={"path": path, "content": content, "overwrite": True},
                 description="Write text file deterministically",
             ),
         ]
@@ -451,6 +477,40 @@ class DesktopRecipeRegistry:
             steps=steps,
             done_criteria=done_criteria,
             summary="Text file created.",
+        )
+
+    def _plan_list_directory(self, args: dict[str, Any], context: RunContext) -> RecipePlan:
+        path = args.get("path")
+        if not path:
+            raise ValueError("path is required")
+        recursive = bool(args.get("recursive", False))
+        glob = args.get("glob")
+        max_entries = int(args.get("max_entries") or 200)
+
+        steps = [
+            RecipeStep(
+                name="list_directory",
+                tool_name="builtin:fs:list_dir",
+                arguments={
+                    "path": path,
+                    "recursive": recursive,
+                    "glob": glob,
+                    "max_entries": max_entries,
+                },
+                description="List directory contents deterministically",
+            )
+        ]
+
+        def done_criteria(_: RunContext, step_results: list[dict[str, Any]]) -> bool:
+            if not step_results:
+                return False
+            return step_results[-1].get("success", False)
+
+        return RecipePlan(
+            name="list_directory",
+            steps=steps,
+            done_criteria=done_criteria,
+            summary="Directory listed.",
         )
 
 
@@ -495,6 +555,17 @@ def _extract_file_request(goal: str) -> tuple[str, str] | None:
         return None
     content = _extract_file_content(goal) or ""
     return path, content
+
+
+def _extract_list_request(goal: str) -> dict[str, Any] | None:
+    if not re.search(r"\b(list|show)\b", goal, re.IGNORECASE):
+        return None
+    if not re.search(r"\b(files|file|directory|dir|folders?)\b", goal, re.IGNORECASE):
+        return None
+    path = _extract_file_path(goal)
+    if not path:
+        return None
+    return {"path": path}
 
 
 def _extract_file_path(goal: str) -> str | None:

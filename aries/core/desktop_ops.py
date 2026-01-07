@@ -212,7 +212,7 @@ class DesktopOpsController:
                     answer = await get_user_input(f"{question} ")
                     messages.append({"role": "user", "content": answer})
                     continue
-                if self.mode == DesktopOpsMode.COMMANDER and not recipe_attempted:
+                if not recipe_attempted:
                     recipe_result = await self._attempt_recipe_fallback(
                         context,
                         artifacts,
@@ -406,14 +406,15 @@ class DesktopOpsController:
         )
         result = await self._execute_recipe(context, recipe_call)
         artifacts.extend(result.get("artifacts", []))
+        summary = result.get("message", {}).get("content") or "Desktop Ops completed."
         if result.get("success"):
-            return await self._finalize(
-                context,
-                "completed",
-                result.get("message", {}).get("content") or "Desktop Ops completed.",
-                artifacts,
-            )
-        return None
+            return await self._finalize(context, "completed", summary, artifacts)
+        return await self._finalize(
+            context,
+            "failed",
+            summary or "Desktop Ops failed during fallback recipe.",
+            artifacts,
+        )
 
     async def _execute_call(self, context: RunContext, call: ToolCall) -> dict[str, Any]:
         if call.name.startswith(recipe_prefix()):
@@ -582,7 +583,9 @@ class DesktopOpsController:
             tool_id, tool, error = self.app._resolve_tool_reference(name)
             if tool:
                 return tool_id, tool, None
-        return None, None, error or f"Tool {step.tool_name} unavailable"
+        hint = "Tool unavailable. Run /doctor to check tool availability."
+        detail = error or f"Tool {step.tool_name} unavailable"
+        return None, None, f"{detail} {hint}"
 
     async def _maybe_stream_process_output(
         self,
@@ -892,7 +895,9 @@ class DesktopOpsController:
         if self.mode == DesktopOpsMode.COMMANDER:
             if risk == DesktopRisk.EXEC_USERSPACE and self._allowlisted(tool, args):
                 return False
-            return risk not in {DesktopRisk.READ_ONLY, DesktopRisk.WRITE_SAFE}
+            if risk in {DesktopRisk.NETWORK, DesktopRisk.WRITE_DESTRUCTIVE, DesktopRisk.EXEC_PRIVILEGED}:
+                return not self._allowlisted(tool, args)
+            return risk not in {DesktopRisk.READ_ONLY}
         return False
 
     def _allowlisted(self, tool: Any, args: dict[str, Any]) -> bool:

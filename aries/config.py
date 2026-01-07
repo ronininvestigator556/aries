@@ -226,9 +226,16 @@ class MCPProvidersConfig(BaseModel):
     retry: MCPRetryConfig = Field(default_factory=MCPRetryConfig)
 
 
+class BuiltinProvidersConfig(BaseModel):
+    """Configuration for builtin tool providers."""
+
+    enabled: bool = True
+
+
 class ProvidersConfig(BaseModel):
     """Container for optional tool providers."""
 
+    builtin: BuiltinProvidersConfig = Field(default_factory=BuiltinProvidersConfig)
     mcp: MCPProvidersConfig = Field(default_factory=MCPProvidersConfig)
     strict_metadata: bool = False
     strict_metadata_max_issues: int = Field(default=25, ge=1, le=500)

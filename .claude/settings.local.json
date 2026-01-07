@@ -5,7 +5,12 @@
       "Bash(if not exist prompts mkdir prompts)",
       "Bash(python -m py_compile:*)",
       "Bash(python:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(where:*)",
+      "Bash(test:*)",
+      "Bash(C:/Users/muram/Dev/aries/node_modules/.bin/desktop-commander.cmd:*)",
+      "Bash(ollama show:*)",
+      "Bash(ollama list:*)"
     ]
   }
 }

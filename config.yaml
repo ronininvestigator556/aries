@@ -4,7 +4,7 @@
 # Ollama settings
 ollama:
   host: "http://localhost:11434"
-  default_model: "ministral-3:latest"
+  default_model: "llama3.2:latest"
   embedding_model: "nomic-embed-text"
   timeout: 120
 

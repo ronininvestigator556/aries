@@ -200,6 +200,13 @@ class DesktopOpsController:
                 if self._is_done(content):
                     summary = content or "Desktop Ops completed."
                     return await self._finalize(context, "completed", summary, artifacts)
+
+                # Check if task appears complete based on context
+                if self._task_appears_complete(context, content):
+                    display_info("Task appears complete based on analysis.")
+                    summary = content or "Desktop Ops completed the requested task."
+                    return await self._finalize(context, "completed", summary, artifacts)
+
                 question = self._extract_question(content)
                 if question:
                     answer = await get_user_input(f"{question} ")
@@ -226,13 +233,27 @@ class DesktopOpsController:
                 # give the model a chance to self-correct with a nudge.
                 if content and nudge_count < max_nudges:
                     nudge_count += 1
+
+                    # Provide more specific guidance based on the content
+                    nudge_message = (
+                        "CRITICAL: You must either use a tool call OR explicitly say 'DONE'.\n\n"
+                        "If the task is complete:\n"
+                        "- Respond with exactly: 'DONE: <brief summary of what was accomplished>'\n\n"
+                        "If you need to perform an action:\n"
+                        "- Use the function calling mechanism to invoke a tool\n"
+                        "- DO NOT describe what you would do - actually call the tool\n"
+                        "- DO NOT write code blocks or markdown - use JSON tool calls\n\n"
+                        "Available actions:\n"
+                        "- Execute commands: call execute_command tool\n"
+                        "- List files: call list_directory tool\n"
+                        "- Read files: call read_file tool\n"
+                        "- Write files: call write_file tool\n\n"
+                        "If you're asking a question, prefix it with 'QUESTION:' so I can prompt the user."
+                    )
+
                     messages.append({
                         "role": "system",
-                        "content": (
-                            "You provided text but no tool calls. Please use the available tools to complete the request, "
-                            "or say DONE if finished. IMPORTANT: Use the actual tool calling mechanism (JSON tool calls), "
-                            "do not just write markdown code blocks."
-                        )
+                        "content": nudge_message
                     })
                     display_warning(f"No tool call provided; nudging model (attempt {nudge_count}/{max_nudges})...")
                     continue
@@ -328,15 +349,25 @@ class DesktopOpsController:
             f"Active mode: {self.mode.value}. "
             "Your goal is to complete the user's request using the available tools. "
             "Operate in a plan→act→observe→adjust loop. "
-            "Infer the next obvious step when unambiguous. "
-            "IMPORTANT: Use tools for every single action (file system, command execution, etc.). "
-            "Do not just describe what you would do. If you need to list files, call the list_directory tool. "
-            "If you need to read a file, call the read_file tool. "
-            "Never assume success; always read tool output before proceeding. "
-            "Self-correct common failures (missing dependencies, wrong working directory, "
-            "virtualenv issues, permissions). "
-            "Ask a single short clarifying question only when required. "
-            "When finished, reply with DONE and a brief completion summary."
+            "\n\n"
+            "CRITICAL RULES:\n"
+            "1. ALWAYS use tool calls (function calls) to perform actions - NEVER just describe them\n"
+            "2. When the requested task is complete, respond with: 'DONE: <summary>'\n"
+            "3. If you need clarification, prefix your question with 'QUESTION:'\n"
+            "4. DO NOT ask for next steps after completing a task - just say DONE\n"
+            "\n\n"
+            "Tool Usage:\n"
+            "- Execute commands: use execute_command tool (not descriptions)\n"
+            "- List files: use list_directory tool\n"
+            "- Read files: use read_file tool\n"
+            "- Write files: use write_file tool\n"
+            "\n\n"
+            "Important Guidelines:\n"
+            "- Infer the next obvious step when unambiguous\n"
+            "- Never assume success; always read tool output before proceeding\n"
+            "- Self-correct common failures (missing dependencies, wrong working directory, virtualenv issues, permissions)\n"
+            "- Only ask for clarification when truly necessary (not after completing the task)\n"
+            "- When you've accomplished what was requested, say 'DONE: <what you did>' - do not ask for more work"
         )
 
     async def _propose_plan(self, goal: str) -> str:
@@ -819,7 +850,7 @@ class DesktopOpsController:
         args: dict[str, Any],
     ) -> tuple[bool, str, list[Path] | None]:
         approval_reason = "auto"
-        allowed_paths = None
+        allowed_paths = context.allowed_roots
 
         if self._requires_path_override(context, tool, args):
             approved = await self._request_path_override(context, tool, args)
@@ -1039,16 +1070,118 @@ class DesktopOpsController:
         if not content:
             return False
         upper = content.upper()
-        return bool(re.search(r"\b(DONE|COMPLETE|COMPLETED|FINISHED)\b", upper))
+
+        # Check for explicit completion markers
+        if re.search(r"\b(DONE|COMPLETE|COMPLETED|FINISHED)\b", upper):
+            return True
+
+        # Check for completion phrases
+        completion_phrases = [
+            "TASK COMPLETE",
+            "ALL DONE",
+            "SUCCESSFULLY COMPLETED",
+            "OPERATION SUCCESSFUL",
+            "EXECUTION COMPLETE",
+        ]
+        for phrase in completion_phrases:
+            if phrase in upper:
+                return True
+
+        return False
+
+    def _task_appears_complete(self, context: RunContext, content: str) -> bool:
+        """Detect if the task appears complete even without explicit DONE signal.
+
+        Args:
+            context: Current run context with audit log
+            content: Assistant's response content
+
+        Returns:
+            True if task appears complete based on heuristics
+        """
+        if not content:
+            return False
+
+        # Only apply this heuristic if at least one tool was executed successfully
+        successful_tools = [
+            entry for entry in context.audit_log
+            if entry.get("event") == "tool_call" and entry.get("success")
+        ]
+        if not successful_tools:
+            return False
+
+        lower_content = content.lower()
+
+        # Check if model is asking what to do next (indicates current task is done)
+        next_step_indicators = [
+            "what would you like",
+            "what do you want",
+            "which folder would you like",
+            "would you like me to",
+            "should i",
+            "what next",
+            "anything else",
+            "what else",
+            "next steps",
+            "what should i do next",
+            "do you want me to",
+        ]
+
+        for indicator in next_step_indicators:
+            if indicator in lower_content:
+                # Model is asking for next task, current one appears done
+                return True
+
+        # Check if response indicates successful completion without explicit DONE
+        success_indicators = [
+            "successfully",
+            "here's the",
+            "here are the",
+            "the following",
+            "contains the following",
+            "directory contains",
+        ]
+
+        # If we see success indicators AND the model is asking a question,
+        # it likely completed the task and is asking what's next
+        has_success_indicator = any(indicator in lower_content for indicator in success_indicators)
+        ends_with_question = content.strip().endswith("?")
+
+        if has_success_indicator and ends_with_question:
+            return True
+
+        return False
 
     def _extract_question(self, content: str) -> str | None:
         if not content:
             return None
+
+        # Check for explicit question markers first
         markers = ("QUESTION:", "CLARIFY:", "NEED INPUT:")
         for marker in markers:
             if marker in content.upper():
                 parts = content.split(":", 1)
                 return parts[1].strip() if len(parts) > 1 else content
+
+        # Check if content ends with a question mark (natural question detection)
+        stripped = content.strip()
+        if stripped.endswith("?"):
+            # If the last sentence is a question, extract it
+            sentences = stripped.split("\n")
+            last_sentence = sentences[-1].strip()
+            if last_sentence.endswith("?"):
+                return last_sentence
+
+        # Check for question patterns in the last few lines
+        lines = stripped.split("\n")
+        for line in reversed(lines[-3:]):  # Check last 3 lines
+            line = line.strip()
+            if line.endswith("?") or any(
+                line.lower().startswith(prefix)
+                for prefix in ("would you like", "do you want", "should i", "which", "what", "how")
+            ):
+                return line
+
         return None
 
     def _find_repo_root(self, cwd: Path) -> Path | None:

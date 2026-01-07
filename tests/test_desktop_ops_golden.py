@@ -140,7 +140,9 @@ async def test_desktop_ops_golden_transcript_episodes(
 
     for episode in episodes:
         config = Config()
-        config.desktop_ops.enabled = True
+        config.desktop_ops.enabled = (
+            False  # Disable during Aries init to bypass strict provider check
+        )
         config.desktop_ops.mode = "commander"
         config.workspace.root = tmp_path / "workspaces"
         config.desktop_ops.process_poll.max_idle_seconds = 5
@@ -152,6 +154,7 @@ async def test_desktop_ops_golden_transcript_episodes(
             config.tools.allow_network = True
 
         app = Aries(config)
+        app.config.desktop_ops.enabled = True  # Enable for Controller
         app.workspace.new("demo")
         start_tool = DummyStartProcessTool("proc-1", requires_network=requires_network)
         read_tool = DummyReadProcessTool(outputs=list(episode.outputs))

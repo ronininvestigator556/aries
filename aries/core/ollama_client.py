@@ -2,8 +2,8 @@
 Ollama API client for LLM communication.
 """
 
-import asyncio
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import ollama
 from ollama import AsyncClient
@@ -14,7 +14,7 @@ from aries.exceptions import OllamaConnectionError, OllamaError, OllamaModelErro
 
 class OllamaClient:
     """Async client for Ollama API."""
-    
+
     def __init__(self, config: OllamaConfig) -> None:
         """Initialize Ollama client.
         
@@ -23,7 +23,7 @@ class OllamaClient:
         """
         self.config = config
         self.client = AsyncClient(host=config.host)
-    
+
     async def is_available(self) -> bool:
         """Check if Ollama server is available.
         
@@ -35,7 +35,7 @@ class OllamaClient:
             return True
         except Exception:
             return False
-    
+
     async def list_models(self) -> list[dict[str, Any]]:
         """List available models.
         
@@ -52,7 +52,7 @@ class OllamaClient:
                 models = response.models
             else:
                 models = response.get("models", [])
-            
+
             # Convert to dicts if they are objects
             result = []
             for m in models:
@@ -74,7 +74,7 @@ class OllamaClient:
             return result
         except Exception as e:
             raise OllamaConnectionError(f"Failed to list models: {e}") from e
-    
+
     async def get_model_names(self) -> list[str]:
         """Get list of model names.
         
@@ -83,7 +83,7 @@ class OllamaClient:
         """
         models = await self.list_models()
         return [m["name"] for m in models]
-    
+
     async def model_exists(self, model_name: str) -> bool:
         """Check if a model exists locally.
         
@@ -100,7 +100,7 @@ class OllamaClient:
             for m in models
         )
 
-    
+
     async def chat(
         self,
         model: str,
@@ -134,15 +134,20 @@ class OllamaClient:
                 **kwargs,
             )
             if raw:
+                if hasattr(response, "model_dump"):
+                    return response.model_dump()
                 return response
+
+            if hasattr(response, "message"):
+                return response.message.content
             return response["message"]["content"]
         except ollama.ResponseError as e:
             if "not found" in str(e).lower():
-                raise OllamaModelError(f"Model not found: {model}") from e
+                raise OllamaModelError(f"Model not found: {model} - {e}") from e
             raise OllamaError(f"Chat failed: {e}") from e
         except Exception as e:
             raise OllamaError(f"Chat failed: {e}") from e
-    
+
     async def chat_stream(
         self,
         model: str,
@@ -175,11 +180,11 @@ class OllamaClient:
                     yield chunk["message"]["content"]
         except ollama.ResponseError as e:
             if "not found" in str(e).lower():
-                raise OllamaModelError(f"Model not found: {model}") from e
+                raise OllamaModelError(f"Model not found: {model} - {e}") from e
             raise OllamaError(f"Stream failed: {e}") from e
         except Exception as e:
             raise OllamaError(f"Stream failed: {e}") from e
-    
+
     async def generate_embedding(
         self,
         text: str,
@@ -206,7 +211,7 @@ class OllamaClient:
             return response["embedding"]
         except Exception as e:
             raise OllamaError(f"Embedding failed: {e}") from e
-    
+
     async def pull_model(self, model_name: str) -> AsyncIterator[dict[str, Any]]:
         """Pull a model from Ollama registry.
         

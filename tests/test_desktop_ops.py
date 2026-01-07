@@ -7,7 +7,7 @@ import pytest
 from pathlib import Path
 
 from aries.cli import Aries
-from aries.config import Config
+from aries.config import Config, MCPServerConfig
 from aries.core.desktop_ops import DesktopOpsController
 from aries.providers.base import Provider
 from aries.tools.base import BaseTool, ToolResult
@@ -47,6 +47,10 @@ async def test_desktop_ops_executes_tool_calls(tmp_path: Path, monkeypatch: pyte
     config.desktop_ops.enabled = True
     config.desktop_ops.mode = "commander"
     config.workspace.root = tmp_path / "workspaces"
+    config.providers.mcp.enabled = True
+    config.providers.mcp.servers = [
+        MCPServerConfig(id="desktop_commander", command=["dummy"])
+    ]
 
     app = Aries(config)
     app.workspace.new("demo")
@@ -83,6 +87,10 @@ async def test_desktop_ops_denies_path_override(tmp_path: Path, monkeypatch: pyt
     config.desktop_ops.mode = "commander"
     config.desktop_ops.max_retries_per_step = 0
     config.workspace.root = tmp_path / "workspaces"
+    config.providers.mcp.enabled = True
+    config.providers.mcp.servers = [
+        MCPServerConfig(id="desktop_commander", command=["dummy"])
+    ]
 
     app = Aries(config)
     app.workspace.new("demo")
@@ -114,6 +122,10 @@ async def test_desktop_ops_audit_log_paths_resolve(tmp_path: Path, monkeypatch: 
     config.desktop_ops.mode = "commander"
     config.workspace.root = Path("workspaces")
     config.prompts.directory = (Path(__file__).resolve().parents[1] / "prompts")
+    config.providers.mcp.enabled = True
+    config.providers.mcp.servers = [
+        MCPServerConfig(id="desktop_commander", command=["dummy"])
+    ]
 
     app = Aries(config)
     app.workspace.new("demo")
@@ -144,6 +156,10 @@ async def test_desktop_ops_empty_model_output_uses_recipe_fallback(
     config.desktop_ops.mode = "commander"
     config.workspace.root = tmp_path / "workspaces"
     config.tools.confirmation_required = False
+    config.providers.mcp.enabled = True
+    config.providers.mcp.servers = [
+        MCPServerConfig(id="desktop_commander", command=["dummy"])
+    ]
 
     app = Aries(config)
     app.workspace.new("demo")

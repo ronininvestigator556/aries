@@ -4,9 +4,10 @@
 # Ollama settings
 ollama:
   host: "http://localhost:11434"
-  default_model: "huihui_ai/qwen3-abliterated:4b"
+  default_model: "llama3.2:latest"
   embedding_model: "nomic-embed-text"
   timeout: 120
+
 
 # SearXNG web search settings
 search:
@@ -61,6 +62,7 @@ desktop_ops:
   server_id: "desktop_commander"
   allowed_roots:
     - "C:/Users/muram/Documents"
+  summary_format: "text"
   auto_exec_allowlist:
     - "mcp:desktop_commander:start_process:git status"
     - "mcp:desktop_commander:start_process:python --version"
@@ -86,10 +88,9 @@ providers:
     servers:
       - id: "desktop_commander"
         transport: "stdio"
-        command:
-          - "C:/Users/muram/Dev/aries/node_modules/.bin/npx.cmd"
-          - "-y"
-          - "@chriscoletech/desktop-commander-mcp"
+        command: ["C:/Users/muram/Dev/aries/node_modules/.bin/desktop-commander.cmd"]
+        args: []
+        env: {}
 
 # Policy display settings
 policy:

@@ -1,12 +1,11 @@
-from __future__ import annotations
-
+import unittest.mock
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
 from aries.cli import Aries
-from aries.config import Config
+from aries.config import Config, MCPServerConfig
 from aries.core.desktop_ops import DesktopOpsController
 from aries.core.desktop_recipes import RecipeMatch, RecipePlan, RecipeStep
 from aries.providers.base import Provider
@@ -91,9 +90,15 @@ async def test_desktop_plan_produces_steps_without_execution(tmp_path) -> None:
     config = Config()
     config.desktop_ops.enabled = True
     config.desktop_ops.mode = "commander"
+    config.desktop_ops.server_id = "desktop_commander"
     config.workspace.root = tmp_path / "workspaces"
+    config.providers.mcp.enabled = True
+    config.providers.mcp.servers = [
+        MCPServerConfig(id="desktop_commander", command=["echo", "dummy"])
+    ]
 
-    app = Aries(config)
+    with unittest.mock.patch("aries.cli.DesktopCommanderProvider"):
+        app = Aries(config)
     app.workspace.new("demo")
 
     shell_tool = DummyShellTool()
@@ -113,9 +118,15 @@ async def test_desktop_plan_deterministic_output(tmp_path: Path, monkeypatch: py
     config = Config()
     config.desktop_ops.enabled = True
     config.desktop_ops.mode = "commander"
+    config.desktop_ops.server_id = "desktop_commander"
     config.workspace.root = tmp_path / "workspaces"
+    config.providers.mcp.enabled = True
+    config.providers.mcp.servers = [
+        MCPServerConfig(id="desktop_commander", command=["echo", "dummy"])
+    ]
 
-    app = Aries(config)
+    with unittest.mock.patch("aries.cli.DesktopCommanderProvider"):
+        app = Aries(config)
     app.workspace.new("demo")
 
     read_tool = DummyReadTool()
@@ -159,9 +170,15 @@ async def test_desktop_dry_run_skips_exec_tools(tmp_path: Path, monkeypatch: pyt
     config = Config()
     config.desktop_ops.enabled = True
     config.desktop_ops.mode = "commander"
+    config.desktop_ops.server_id = "desktop_commander"
     config.workspace.root = tmp_path / "workspaces"
+    config.providers.mcp.enabled = True
+    config.providers.mcp.servers = [
+        MCPServerConfig(id="desktop_commander", command=["echo", "dummy"])
+    ]
 
-    app = Aries(config)
+    with unittest.mock.patch("aries.cli.DesktopCommanderProvider"):
+        app = Aries(config)
     app.workspace.new("demo")
 
     read_tool = DummyReadTool()

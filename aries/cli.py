@@ -74,6 +74,7 @@ from aries.core.tool_validation import validate_tools
 from aries.core.tokenizer import TokenEstimator
 from aries.exceptions import AriesError, ConfigError
 from aries.providers import CoreProvider, MCPProvider, DesktopCommanderProvider
+from aries.providers.builtin import BuiltinProvider
 from aries.providers.desktop_commander import select_desktop_commander_server
 from aries.providers.mcp import MCPServerStatus, register_status
 from aries.tools.base import BaseTool, ToolResult
@@ -107,6 +108,8 @@ class Aries:
         self.config = config
         self._warnings_shown: set[str] = set()
         self.tool_registry = ToolRegistry()
+        if getattr(config.providers, "builtin", None) is None or config.providers.builtin.enabled:
+            self.tool_registry.register_provider(BuiltinProvider())
         self.tool_registry.register_provider(CoreProvider())
         self._mcp_state: list[dict[str, Any]] = []
         self._register_mcp_providers()
@@ -294,9 +297,12 @@ class Aries:
             return
         providers_cfg = getattr(self.config, "providers", None)
         mcp_cfg = getattr(providers_cfg, "mcp", None) if providers_cfg else None
+        builtin_enabled = bool(getattr(getattr(providers_cfg, "builtin", None), "enabled", False))
         servers = mcp_cfg.servers if mcp_cfg else []
         server = select_desktop_commander_server(servers, desktop_cfg.server_id)
         if not server:
+            if builtin_enabled:
+                return
             self._warn_once(
                 "desktop_ops:no_server",
                 (

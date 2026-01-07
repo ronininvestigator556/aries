@@ -51,8 +51,6 @@ def test_policy_matrix(mode: str, risk: DesktopRisk, allowlisted: bool) -> None:
             expected = False
         elif risk == DesktopRisk.EXEC_USERSPACE and allowlisted:
             expected = False
-        elif risk in {DesktopRisk.WRITE_SAFE}:
-            expected = False
         elif allowlisted and risk in {DesktopRisk.WRITE_DESTRUCTIVE, DesktopRisk.EXEC_PRIVILEGED, DesktopRisk.NETWORK}:
             expected = False
         else:

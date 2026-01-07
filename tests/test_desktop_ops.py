@@ -150,6 +150,8 @@ async def test_desktop_ops_empty_model_output_uses_recipe_fallback(
 
     app.ollama.chat = AsyncMock(return_value={"message": {"content": ""}})
 
+    monkeypatch.setattr("aries.core.desktop_ops.get_user_input", AsyncMock(return_value="y"))
+
     controller = DesktopOpsController(app, mode="commander")
     match_calls = {"count": 0}
     original_match = controller.recipe_registry.match_goal

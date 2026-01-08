@@ -1420,9 +1420,13 @@ async def run_cli() -> int:
     Returns:
         Exit code (0 for success).
     """
+    smoke_mode = any(arg in {"--smoke", "/smoke"} for arg in sys.argv[1:])
     # Load configuration
     config_path = Path("config.yaml")
     config = load_config(config_path if config_path.exists() else None)
+    if smoke_mode and getattr(config, "providers", None) and getattr(config.providers, "mcp", None):
+        config.providers.mcp.enabled = False
+        config.providers.mcp.require = False
     
     # Create and start application
     try:
@@ -1430,6 +1434,10 @@ async def run_cli() -> int:
     except AriesError as exc:
         display_error(str(exc))
         return 1
+    if smoke_mode:
+        from aries.core.smoke import run_smoke
+
+        return await run_smoke(app)
     return await app.start()
 
 

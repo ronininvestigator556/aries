@@ -14,21 +14,22 @@ This guide is written to be practical and “operator-first”: you get visibili
 
 ## Table of Contents
 1. [Quickstart](#quickstart)  
-2. [Core Concepts](#core-concepts)  
-3. [Installation & Dependencies](#installation--dependencies)  
-4. [Configuration](#configuration)  
-5. [Everyday Usage](#everyday-usage)  
-6. [Workspaces](#workspaces)  
-7. [Profiles](#profiles)  
-8. [Agent Runs (`/run`)](#agent-runs-run)  
-9. [RAG: Chat with Your Documents](#rag-chat-with-your-documents)  
-10. [Direct Tooling](#direct-tooling)  
-11. [Playwright Integration (MCP)](#playwright-integration-mcp)  
-12. [Desktop Commander Integration (MCP)](#desktop-commander-integration-mcp)  
-13. [Artifacts](#artifacts)  
-14. [Troubleshooting & Diagnostics](#troubleshooting--diagnostics)  
-15. [Security, Safety, and Governance](#security-safety-and-governance)  
-16. [Appendix: Example Workflows](#appendix-example-workflows)
+2. [Smoke Test (Windows)](#smoke-test-windows)  
+3. [Core Concepts](#core-concepts)  
+4. [Installation & Dependencies](#installation--dependencies)  
+5. [Configuration](#configuration)  
+6. [Everyday Usage](#everyday-usage)  
+7. [Workspaces](#workspaces)  
+8. [Profiles](#profiles)  
+9. [Agent Runs (`/run`)](#agent-runs-run)  
+10. [RAG: Chat with Your Documents](#rag-chat-with-your-documents)  
+11. [Direct Tooling](#direct-tooling)  
+12. [Playwright Integration (MCP)](#playwright-integration-mcp)  
+13. [Desktop Commander Integration (MCP)](#desktop-commander-integration-mcp)  
+14. [Artifacts](#artifacts)  
+15. [Troubleshooting & Diagnostics](#troubleshooting--diagnostics)  
+16. [Security, Safety, and Governance](#security-safety-and-governance)  
+17. [Appendix: Example Workflows](#appendix-example-workflows)
 
 ---
 
@@ -89,6 +90,47 @@ Inside Aries:
 1. Configure a Desktop Commander MCP server in `providers.mcp.servers`.
 2. Set `desktop_ops.enabled: true` and `desktop_ops.server_id` to match the MCP server id.
 3. Run `/desktop <goal>` to execute Desktop Ops workflows.
+
+---
+
+## Smoke Test (Windows)
+
+Run a one-command, operator-friendly smoke test that validates the built-in filesystem, shell, and web tools:
+
+```powershell
+python -m aries --smoke
+```
+
+The smoke test:
+- Creates/opens the `smoke` workspace
+- Exercises Desktop Ops policy flow with **builtin** FS/Shell/Web tools
+- Writes a small text file under `desktop_ops.allowed_roots`
+- Runs a harmless shell command via argv
+- Executes a SearXNG search + fetch + extract against `example.com`
+- Confirms artifacts + Desktop Ops audit logs land in the workspace artifacts directory
+
+### Prerequisites
+- SearXNG running and reachable at `search.searxng_url`
+- `desktop_ops.allowed_roots` configured to a safe local directory
+
+### Example Windows Config Snippet
+```yaml
+desktop_ops:
+  allowed_roots:
+    - "C:\\Users\\yourname\\Dev\\aries"
+tools:
+  allow_shell: true
+  allow_network: true
+search:
+  searxng_url: "http://localhost:8080"
+providers:
+  builtin:
+    enabled: true
+  mcp:
+    enabled: false
+```
+
+> Smoke mode uses a narrow, in-memory auto-approval allowlist just for the smoke run. It does **not** change your default security settings on disk.
 
 ---
 

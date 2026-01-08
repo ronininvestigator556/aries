@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from unittest.mock import AsyncMock
 
 import pytest
@@ -65,6 +66,7 @@ def _make_app(tmp_path: Path, tools: list[BaseTool]) -> Aries:
     config.desktop_ops.enabled = True
     config.desktop_ops.mode = "commander"
     config.tools.allow_shell = True
+    config.tools.confirmation_required = False
     config.workspace.root = tmp_path / "workspaces"
 
     app = Aries(config)
@@ -186,3 +188,26 @@ async def test_builtin_fs_tool_routes_through_policy(tmp_path: Path) -> None:
     policy_entries = [entry for entry in context.audit_log if entry.get("event") == "policy_check"]
     assert policy_entries
     assert any(entry.get("tool_id") == "builtin:fs:read_text" for entry in policy_entries)
+
+
+@pytest.mark.asyncio
+async def test_builtin_shell_tool_routes_through_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _make_app(tmp_path, [])
+    controller = DesktopOpsController(app, mode="commander")
+    context = controller._build_context("run command")
+
+    monkeypatch.setattr("aries.core.desktop_ops.get_user_input", AsyncMock(return_value="y"))
+
+    tool_call = ToolCall(
+        id="call",
+        name="builtin:shell:run",
+        arguments={
+            "argv": [sys.executable, "-c", "print('ok')"],
+            "cwd": str(app.workspace.current.root),
+        },
+    )
+    await controller._execute_call(context, tool_call)
+
+    policy_entries = [entry for entry in context.audit_log if entry.get("event") == "policy_check"]
+    assert policy_entries
+    assert any(entry.get("tool_id") == "builtin:shell:run" for entry in policy_entries)

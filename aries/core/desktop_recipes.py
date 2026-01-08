@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -181,6 +182,21 @@ class DesktopRecipeRegistry:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": f"{_RECIPE_PREFIX}web_lookup",
+                    "description": "Search the web and extract text from top results.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "top_n": {"type": "integer", "default": 1},
+                        },
+                        "required": ["query"],
+                    },
+                },
+            },
         ]
 
     def plan(self, name: str, args: dict[str, Any], context: RunContext) -> RecipePlan:
@@ -200,6 +216,8 @@ class DesktopRecipeRegistry:
             return self._plan_build_project(args, context)
         if name == "log_tail":
             return self._plan_log_tail(args, context)
+        if name == "web_lookup":
+            return self._plan_web_lookup(args, context)
         raise ValueError(f"Unknown recipe: {name}")
 
     def match_goal(self, goal: str, context: RunContext) -> RecipeMatch | None:
@@ -270,6 +288,13 @@ class DesktopRecipeRegistry:
                 name="log_tail",
                 arguments={"file_path": log_path},
                 reason="goal_mentions_logs",
+            )
+        web_query = _extract_web_query(goal)
+        if web_query:
+            return RecipeMatch(
+                name="web_lookup",
+                arguments={"query": web_query, "top_n": 1},
+                reason="goal_mentions_web_search",
             )
         return None
 
@@ -518,6 +543,78 @@ class DesktopRecipeRegistry:
             )
         return plan
 
+    def _plan_web_lookup(self, args: dict[str, Any], context: RunContext) -> RecipePlan:
+        query = args.get("query")
+        if not query:
+            raise ValueError("query is required")
+        top_n = int(args.get("top_n") or 1)
+        if top_n <= 0:
+            raise ValueError("top_n must be >= 1")
+
+        def _search_args(_: RunContext, __: dict[str, Any] | None) -> dict[str, Any]:
+            return {"query": query, "top_k": top_n}
+
+        def _fetch_args(_: RunContext, last_result: dict[str, Any] | None) -> dict[str, Any]:
+            if not last_result:
+                raise ValueError("Missing search output for fetch step.")
+            try:
+                payload = json.loads(last_result.get("output") or "{}")
+            except json.JSONDecodeError as exc:
+                raise ValueError("Search output was not valid JSON.") from exc
+            results = payload.get("data", {}).get("results", [])
+            if not results:
+                raise ValueError("Search returned no results to fetch.")
+            url = results[0].get("url")
+            if not url:
+                raise ValueError("Top search result missing URL.")
+            return {"url": url}
+
+        def _extract_args(_: RunContext, last_result: dict[str, Any] | None) -> dict[str, Any]:
+            if not last_result:
+                raise ValueError("Missing fetch output for extract step.")
+            metadata = last_result.get("metadata", {})
+            artifact_ref = metadata.get("artifact_ref")
+            if not artifact_ref:
+                try:
+                    payload = json.loads(last_result.get("output") or "{}")
+                except json.JSONDecodeError as exc:
+                    raise ValueError("Fetch output was not valid JSON.") from exc
+                artifact_ref = payload.get("data", {}).get("artifact_ref")
+            if not artifact_ref:
+                raise ValueError("Fetch step did not return an artifact_ref.")
+            return {"artifact_ref": artifact_ref, "mode": "text"}
+
+        steps = [
+            RecipeStep(
+                name="search_web",
+                tool_name="builtin:web:search",
+                arguments=_search_args,
+                description="Search the web for the query",
+            ),
+            RecipeStep(
+                name="fetch_top_result",
+                tool_name="builtin:web:fetch",
+                arguments=_fetch_args,
+                description="Fetch the top search result",
+            ),
+            RecipeStep(
+                name="extract_text",
+                tool_name="builtin:web:extract",
+                arguments=_extract_args,
+                description="Extract text from the fetched page",
+            ),
+        ]
+
+        def done_criteria(_: RunContext, step_results: list[dict[str, Any]]) -> bool:
+            return bool(step_results and step_results[-1].get("success"))
+
+        return RecipePlan(
+            name="web_lookup",
+            steps=steps,
+            done_criteria=done_criteria,
+            summary="Web search completed with extracted text.",
+        )
+
     def _plan_create_text_file(self, args: dict[str, Any], context: RunContext) -> RecipePlan:
         path = args.get("path")
         if not path:
@@ -600,6 +697,22 @@ def _extract_dest_dir(goal: str) -> str | None:
 def _extract_log_path(goal: str) -> str | None:
     match = re.search(r"(/[^\s]+\.log)", goal)
     return match.group(1) if match else None
+
+
+def _extract_web_query(goal: str) -> str | None:
+    normalized = goal.lower()
+    query_match = re.search(
+        r"search\s+(?:the\s+)?(?:web|internet)\s+(?:for|about)?\s*(.+)",
+        normalized,
+    )
+    if query_match:
+        query = query_match.group(1).strip()
+        return query or goal.strip()
+    if any(token in normalized for token in ("search the web", "web search", "search web")):
+        return goal.strip()
+    if any(token in normalized for token in ("latest", "current", "today")):
+        return goal.strip()
+    return None
 
 
 def _mentions_tests(goal: str) -> bool:

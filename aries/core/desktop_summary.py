@@ -46,6 +46,9 @@ class SummaryBuilder:
         sections.append(self._section_work_performed())
         sections.append(self._section_approvals())
         sections.append(self._section_run_stats())
+        citations = self._section_citations()
+        if citations:
+            sections.append(citations)
         sections.append(self._section_artifacts())
         next_actions = self._section_next_actions()
         if next_actions:
@@ -58,6 +61,9 @@ class SummaryBuilder:
         sections.append(self._section_work_performed_markdown())
         sections.append(self._section_approvals_markdown())
         sections.append(self._section_run_stats_markdown())
+        citations = self._section_citations_markdown()
+        if citations:
+            sections.append(citations)
         sections.append(self._section_artifacts_markdown())
         next_actions = self._section_next_actions_markdown()
         if next_actions:
@@ -78,6 +84,7 @@ class SummaryBuilder:
             "approvals": self._meaningful_approvals(),
             "run_stats": self._run_stats(),
             "artifacts": self._collect_artifacts(),
+            "citations": self._collect_citations(),
             "next_actions": self._next_actions() if self.outcome.status.lower() != "success" else [],
         }
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -184,6 +191,22 @@ class SummaryBuilder:
         )
         lines.append(f"- **Output condensed count**: {stats['output_condensed_count']}")
         lines.append(f"- **Probe steps count**: {stats['probe_steps']}")
+        return "\n".join(lines)
+
+    def _section_citations(self) -> str | None:
+        citations = self._collect_citations()
+        if not citations:
+            return None
+        lines = ["Citations"]
+        lines.extend([f"- {entry}" for entry in citations])
+        return "\n".join(lines)
+
+    def _section_citations_markdown(self) -> str | None:
+        citations = self._collect_citations()
+        if not citations:
+            return None
+        lines = ["## Citations"]
+        lines.extend([f"- {entry}" for entry in citations])
         return "\n".join(lines)
 
     def _section_artifacts(self) -> str:
@@ -339,6 +362,34 @@ class SummaryBuilder:
         for key in grouped:
             grouped[key] = sorted(grouped[key])
         return grouped
+
+    def _collect_citations(self) -> list[str]:
+        citations: list[str] = []
+        seen: set[str] = set()
+
+        for entry in self.audit_entries:
+            if entry.get("event") != "tool_call":
+                continue
+            tool = entry.get("tool") or ""
+            if "web:fetch" not in tool:
+                continue
+            audit = entry.get("audit") or {}
+            url = (audit.get("input") or {}).get("url")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            citations.append(str(url))
+
+        for artifact in self.artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            source = artifact.get("source")
+            if not source or source in seen:
+                continue
+            seen.add(source)
+            citations.append(str(source))
+
+        return citations
 
     def _run_stats(self) -> dict[str, int]:
         tool_calls = [entry for entry in self.audit_entries if entry.get("event") == "tool_call"]

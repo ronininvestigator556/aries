@@ -13,6 +13,11 @@ search:
   searxng_url: "http://localhost:8080"
   default_results: 5
   timeout: 30
+  fetch_timeout_seconds: 20
+  fetch_max_bytes: 2000000
+  fetch_max_redirects: 5
+  extract_max_chars: 20000
+  extract_max_links: 200
 
 # RAG settings
 rag:

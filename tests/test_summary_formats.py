@@ -51,6 +51,7 @@ def test_summary_json_format_contains_required_keys() -> None:
     assert "approvals" in payload
     assert "run_stats" in payload
     assert "artifacts" in payload
+    assert "citations" in payload
 
     run_stats = payload["run_stats"]
     assert "steps_executed" in run_stats

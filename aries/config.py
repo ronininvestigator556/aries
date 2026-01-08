@@ -26,6 +26,11 @@ class SearchConfig(BaseModel):
     searxng_url: str = "http://localhost:8080"
     default_results: int = Field(default=5, ge=1, le=20)
     timeout: int = Field(default=30, ge=1)
+    fetch_timeout_seconds: int = Field(default=20, ge=1)
+    fetch_max_bytes: int = Field(default=2_000_000, ge=1)
+    fetch_max_redirects: int = Field(default=5, ge=0, le=10)
+    extract_max_chars: int = Field(default=20_000, ge=100)
+    extract_max_links: int = Field(default=200, ge=1)
 
 
 class WorkspaceConfig(BaseModel):

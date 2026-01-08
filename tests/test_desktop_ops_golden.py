@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import sys
 from unittest.mock import AsyncMock
 
@@ -224,6 +225,9 @@ async def test_desktop_ops_golden_transcript_episodes(
         )
         if episode.outputs:
             assert any(entry.get("event") == "process_output" for entry in result.audit_log)
+        if episode.outputs == []:
+            assert any(entry.get("event") == "process_stalled" for entry in result.audit_log)
+            assert any(entry.get("event") == "process_stop" for entry in result.audit_log)
         assert result.artifacts
         assert artifact_path in result.summary
 
@@ -238,12 +242,132 @@ async def test_desktop_ops_golden_transcript_episodes(
         tool_calls = [entry for entry in result.audit_log if entry.get("event") == "tool_call"]
         assert_policy_entries_cover_tool_calls(policy_entries, tool_calls)
 
-        if episode.outputs == []:
-            assert any(entry.get("event") == "process_stalled" for entry in result.audit_log)
-            assert any(entry.get("event") == "process_stop" for entry in result.audit_log)
 
-        if requires_network:
-            assert user_input.call_count >= 1
+@pytest.mark.asyncio
+async def test_desktop_ops_web_golden_transcript(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = Config()
+    config.desktop_ops.enabled = False
+    config.desktop_ops.mode = "commander"
+    config.workspace.root = tmp_path / "workspaces"
+    config.tools.allow_network = True
+    config.tools.confirmation_required = False
+
+    app = Aries(config)
+    app.config.desktop_ops.enabled = True
+    app.workspace.new("demo")
+
+    search_tool = app.tool_registry.resolve("builtin:web:search")
+    fetch_tool = app.tool_registry.resolve("builtin:web:fetch")
+    extract_tool = app.tool_registry.resolve("builtin:web:extract")
+
+    assert search_tool and fetch_tool and extract_tool
+
+    artifact_path = app.workspace.current.artifact_dir / "web_fetch_demo.html"
+    artifact_path.write_text("<html><body>Latest report</body></html>", encoding="utf-8")
+
+    search_payload = {
+        "data": {
+            "query": "latest aries release",
+            "results": [
+                {
+                    "rank": 1,
+                    "title": "Aries Release",
+                    "url": "https://example.com/aries",
+                    "snippet": "Latest release notes",
+                }
+            ],
+        }
+    }
+    fetch_payload = {
+        "data": {
+            "url": "https://example.com/aries",
+            "status_code": 200,
+            "content_type": "text/html",
+            "bytes_read": artifact_path.stat().st_size,
+            "truncated": False,
+            "artifact_ref": str(artifact_path),
+        }
+    }
+    extract_payload = {
+        "data": {"artifact_ref": str(artifact_path), "text": "Latest report", "truncated": False}
+    }
+
+    monkeypatch.setattr(
+        search_tool,
+        "execute",
+        AsyncMock(return_value=ToolResult(True, json.dumps(search_payload, sort_keys=True))),
+    )
+    monkeypatch.setattr(
+        fetch_tool,
+        "execute",
+        AsyncMock(
+            return_value=ToolResult(
+                True,
+                json.dumps(fetch_payload, sort_keys=True),
+                metadata={"artifact_ref": str(artifact_path)},
+                artifacts=[
+                    {
+                        "path": str(artifact_path),
+                        "type": "file",
+                        "name": artifact_path.name,
+                        "source": "https://example.com/aries",
+                    }
+                ],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        extract_tool,
+        "execute",
+        AsyncMock(return_value=ToolResult(True, json.dumps(extract_payload, sort_keys=True))),
+    )
+
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "builtin:web:search", "arguments": {"query": "latest aries release"}},
+        },
+        {
+            "id": "call_2",
+            "type": "function",
+            "function": {"name": "builtin:web:fetch", "arguments": {"url": "https://example.com/aries"}},
+        },
+        {
+            "id": "call_3",
+            "type": "function",
+            "function": {
+                "name": "builtin:web:extract",
+                "arguments": {"artifact_ref": str(artifact_path), "mode": "text"},
+            },
+        },
+    ]
+
+    app.ollama.chat = AsyncMock(
+        side_effect=[
+            {"message": {"tool_calls": tool_calls}},
+            {"message": {"content": "DONE: summarized latest aries release."}},
+        ]
+    )
+
+    user_input = AsyncMock(return_value="y")
+    monkeypatch.setattr("aries.core.desktop_ops.get_user_input", user_input)
+
+    controller = DesktopOpsController(app, mode="commander")
+    result = await controller.run("Search the web for the latest Aries release")
+
+    assert result.status == "completed"
+    assert "Artifacts" in result.summary
+    assert "Citations" in result.summary
+    assert "https://example.com/aries" in result.summary
+    assert artifact_path.name in result.summary
+
+    assert user_input.await_count == 1
+    assert any(
+        entry.get("event") == "policy_check" and entry.get("risk") == "NETWORK"
+        for entry in result.audit_log
+    )
+    assert any(entry.get("event") == "artifact" for entry in result.audit_log)
 
 
 @pytest.mark.asyncio

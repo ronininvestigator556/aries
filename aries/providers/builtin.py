@@ -18,6 +18,11 @@ from aries.tools.builtin_shell import (
     BuiltinShellRunTool,
     BuiltinShellStartTool,
 )
+from aries.tools.builtin_web import (
+    BuiltinWebExtractTool,
+    BuiltinWebFetchTool,
+    BuiltinWebSearchTool,
+)
 
 
 class BuiltinProvider(Provider):
@@ -37,4 +42,7 @@ class BuiltinProvider(Provider):
             BuiltinWriteTextTool(),
             BuiltinSearchTextTool(),
             BuiltinApplyPatchTool(),
+            BuiltinWebSearchTool(),
+            BuiltinWebFetchTool(),
+            BuiltinWebExtractTool(),
         ]

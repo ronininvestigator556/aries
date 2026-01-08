@@ -211,3 +211,42 @@ async def test_builtin_shell_tool_routes_through_policy(tmp_path: Path, monkeypa
     policy_entries = [entry for entry in context.audit_log if entry.get("event") == "policy_check"]
     assert policy_entries
     assert any(entry.get("tool_id") == "builtin:shell:run" for entry in policy_entries)
+
+
+@pytest.mark.asyncio
+async def test_builtin_web_tool_routes_through_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _make_app(tmp_path, [])
+    app.config.tools.allow_network = True
+    controller = DesktopOpsController(app, mode="commander")
+    context = controller._build_context("search the web")
+
+    monkeypatch.setattr("aries.core.desktop_ops.get_user_input", AsyncMock(return_value="y"))
+
+    tool_id, tool = app.tool_registry.resolve_with_id("builtin:web:search")
+    monkeypatch.setattr(tool, "execute", AsyncMock(return_value=ToolResult(True, "ok")))
+
+    tool_call = ToolCall(
+        id="call",
+        name="builtin:web:search",
+        arguments={"query": "latest news"},
+    )
+    await controller._execute_call(context, tool_call)
+
+    policy_entries = [entry for entry in context.audit_log if entry.get("event") == "policy_check"]
+    assert policy_entries
+    assert any(entry.get("tool_id") == "builtin:web:search" for entry in policy_entries)
+
+
+def test_commander_requires_network_approval_unless_allowlisted(tmp_path: Path) -> None:
+    app = _make_app(tmp_path, [])
+    controller = DesktopOpsController(app, mode="commander")
+
+    tool = app.tool_registry.resolve("builtin:web:search")
+    assert tool is not None
+    args = {"query": "latest news"}
+
+    controller.config.auto_exec_allowlist = []
+    assert controller._requires_approval(DesktopRisk.NETWORK, tool, args) is True
+
+    controller.config.auto_exec_allowlist = ["builtin:web:search"]
+    assert controller._requires_approval(DesktopRisk.NETWORK, tool, args) is False

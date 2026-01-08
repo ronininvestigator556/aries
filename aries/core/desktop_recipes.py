@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 from aries.config import DesktopOpsConfig
+from aries.core.workspace import resolve_and_validate_path
+from aries.exceptions import FileToolError
 
 if TYPE_CHECKING:
     from aries.core.desktop_ops import RunContext
@@ -96,9 +98,25 @@ class DesktopRecipeRegistry:
                         "type": "object",
                         "properties": {
                             "repo_root": {"type": "string"},
-                            "command": {"type": "string", "default": "pytest -q"},
+                            "argv": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "default": ["pytest", "-q"],
+                            },
                             "target": {"type": "string"},
                         },
+                        "required": ["repo_root"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": f"{_RECIPE_PREFIX}run_git_status",
+                    "description": "Run git status in the repository.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"repo_root": {"type": "string"}},
                         "required": ["repo_root"],
                     },
                 },
@@ -172,6 +190,8 @@ class DesktopRecipeRegistry:
             return self._plan_python_bootstrap(args, context)
         if name == "run_tests":
             return self._plan_run_tests(args, context)
+        if name == "run_git_status":
+            return self._plan_run_git_status(args, context)
         if name == "create_text_file":
             return self._plan_create_text_file(args, context)
         if name == "list_directory":
@@ -210,6 +230,17 @@ class DesktopRecipeRegistry:
             )
         list_request = _extract_list_request(goal)
         if list_request:
+            try:
+                resolved = resolve_and_validate_path(
+                    list_request["path"],
+                    workspace=context.cwd,
+                    allowed_paths=context.allowed_roots,
+                )
+                if not resolved.exists():
+                    list_request = None
+            except FileToolError:
+                list_request = None
+        if list_request:
             return RecipeMatch(
                 name="list_directory",
                 arguments=list_request,
@@ -220,6 +251,12 @@ class DesktopRecipeRegistry:
                 name="run_tests",
                 arguments={"repo_root": str(context.repo_root)},
                 reason="goal_mentions_tests",
+            )
+        if context.repo_root and _mentions_git_status(goal):
+            return RecipeMatch(
+                name="run_git_status",
+                arguments={"repo_root": str(context.repo_root)},
+                reason="goal_mentions_git_status",
             )
         if "build" in normalized and context.repo_root:
             return RecipeMatch(
@@ -343,32 +380,37 @@ class DesktopRecipeRegistry:
         repo_root = args.get("repo_root")
         if not repo_root:
             raise ValueError("repo_root is required")
-        command = args.get("command") or "pytest -q"
+        argv = args.get("argv")
+        if not isinstance(argv, list) or not argv:
+            argv = ["pytest", "-q"]
         target = args.get("target")
-        base_cmd = f"cd {repo_root} && {command}"
+        command_argv = [str(part) for part in argv]
         if target:
-            base_cmd = f"{base_cmd} {target}"
+            command_argv.append(str(target))
 
         def retry_steps(output: str) -> Iterable[RecipeStep]:
             if "No module named pytest" in output or "pytest: command not found" in output:
                 yield RecipeStep(
                     name="install_pytest",
-                    tool_name="shell",
-                    arguments={"command": f"cd {repo_root} && python -m pip install pytest"},
+                    tool_name="builtin:shell:run",
+                    arguments={
+                        "argv": ["python", "-m", "pip", "install", "pytest"],
+                        "cwd": repo_root,
+                    },
                     description="Install pytest for missing dependency",
                 )
                 yield RecipeStep(
                     name="rerun_tests",
-                    tool_name="shell",
-                    arguments={"command": base_cmd},
+                    tool_name="builtin:shell:run",
+                    arguments={"argv": command_argv, "cwd": repo_root},
                     description="Re-run tests after installing pytest",
                 )
 
         steps = [
             RecipeStep(
                 name="run_tests",
-                tool_name="shell",
-                arguments={"command": base_cmd},
+                tool_name="builtin:shell:run",
+                arguments={"argv": command_argv, "cwd": repo_root},
                 description="Run test suite",
                 on_failure=retry_steps,
             )
@@ -382,6 +424,30 @@ class DesktopRecipeRegistry:
             steps=steps,
             done_criteria=done_criteria,
             summary="Tests executed.",
+        )
+
+    def _plan_run_git_status(self, args: dict[str, Any], context: RunContext) -> RecipePlan:
+        repo_root = args.get("repo_root")
+        if not repo_root:
+            raise ValueError("repo_root is required")
+
+        steps = [
+            RecipeStep(
+                name="run_git_status",
+                tool_name="builtin:shell:run",
+                arguments={"argv": ["git", "status"], "cwd": repo_root},
+                description="Run git status",
+            )
+        ]
+
+        def done_criteria(_: RunContext, step_results: list[dict[str, Any]]) -> bool:
+            return bool(step_results and step_results[-1].get("success"))
+
+        return RecipePlan(
+            name="run_git_status",
+            steps=steps,
+            done_criteria=done_criteria,
+            summary="Git status captured.",
         )
 
     def _plan_build_project(self, args: dict[str, Any], context: RunContext) -> RecipePlan:
@@ -545,6 +611,10 @@ def _mentions_tests(goal: str) -> bool:
     if re.search(r"\b(unit|integration)\s+tests?\b", normalized):
         return True
     return bool(re.search(r"\b(run|rerun|execute)\s+(the\s+)?tests?\b", normalized))
+
+
+def _mentions_git_status(goal: str) -> bool:
+    return bool(re.search(r"\bgit\s+status\b", goal, re.IGNORECASE))
 
 
 def _extract_file_request(goal: str) -> tuple[str, str] | None:

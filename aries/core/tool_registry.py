@@ -141,7 +141,7 @@ class ToolRegistry:
     def _make_tool_id(self, provider: Provider, tool: BaseTool) -> ToolId:
         """Build a ToolId from provider and tool metadata."""
         provider_id = provider.provider_id.split(":", 1)[0]
-        server_id = getattr(provider, "server_id", None) or getattr(tool, "server_id", None)
+        server_id = getattr(tool, "server_id", None) or getattr(provider, "server_id", None)
 
         # Preserve the full provider identifier for provenance reporting.
         setattr(tool, "provider_key", provider.provider_id)

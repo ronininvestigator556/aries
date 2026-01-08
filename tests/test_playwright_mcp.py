@@ -37,6 +37,7 @@ def mcp_provider(stub_env):
     """Create an MCP provider instance connected to the stub server."""
     config = MCPServerConfig(
         id="playwright",
+        transport="command",
         command=[sys.executable, str(SERVER_SCRIPT)],
         # config.env is merged on top of os.environ, so we don't strictly need to duplicate here
         # if stub_env sets it, but keeping it explicit for the test logic if needed.
@@ -143,5 +144,4 @@ async def test_path_safety_enforcement(mcp_provider, workspace_manager, tmp_path
         or "denied by policy" in error_msg
         or "Path outside allowed locations" in error_msg
     )
-
 

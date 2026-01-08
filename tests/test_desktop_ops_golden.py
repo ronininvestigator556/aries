@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from unittest.mock import AsyncMock
 
 import pytest
@@ -138,7 +139,7 @@ async def test_desktop_ops_golden_transcript_episodes(
 ) -> None:
     episodes = load_episodes(Path("tests/fixtures/claude_example_convo.txt"))
 
-    for episode in episodes:
+    for index, episode in enumerate(episodes, start=1):
         config = Config()
         config.desktop_ops.enabled = (
             False  # Disable during Aries init to bypass strict provider check
@@ -207,7 +208,7 @@ async def test_desktop_ops_golden_transcript_episodes(
         monkeypatch.setattr("aries.core.desktop_ops.asyncio.sleep", AsyncMock())
 
         controller = DesktopOpsController(app, mode="commander")
-        result = await controller.run(f"Run episode: {episode.name}")
+        result = await controller.run(f"Replay transcript episode {index}")
 
         assert result.status == "completed"
         assert "Commands executed" in result.summary
@@ -310,3 +311,54 @@ async def test_desktop_ops_fs_golden_transcript(
         actual = policy_by_tool.get(expected_entry["tool_id"])
         assert actual is not None
         assert actual["approval_required"] == expected_entry["approval_required"]
+
+
+@pytest.mark.asyncio
+async def test_desktop_ops_shell_run_transcript(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config()
+    config.desktop_ops.enabled = True
+    config.desktop_ops.mode = "commander"
+    config.workspace.root = tmp_path / "workspaces"
+    config.tools.allow_shell = True
+    config.tools.confirmation_required = False
+
+    app = Aries(config)
+    app.workspace.new("demo")
+
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "builtin:shell:run",
+                "arguments": {
+                    "argv": [sys.executable, "-c", "print('hello')"],
+                    "cwd": str(app.workspace.current.root),
+                },
+            },
+        }
+    ]
+
+    app.ollama.chat = AsyncMock(
+        side_effect=[
+            {"message": {"tool_calls": tool_calls}},
+            {"message": {"content": "DONE: ran shell command"}},
+        ]
+    )
+
+    user_input = AsyncMock(return_value="y")
+    monkeypatch.setattr("aries.core.desktop_ops.get_user_input", user_input)
+
+    controller = DesktopOpsController(app, mode="commander")
+    result = await controller.run("execute a shell command")
+
+    assert result.status == "completed"
+    assert "Commands executed" in result.summary
+    assert "builtin:shell:run" in result.summary
+
+    policy_entries = [entry for entry in result.audit_log if entry.get("event") == "policy_check"]
+    assert any(entry.get("risk") == "EXEC_USERSPACE" for entry in policy_entries)
+    assert any(entry.get("approval_required") for entry in policy_entries if entry.get("risk") == "EXEC_USERSPACE")
+    assert user_input.call_count >= 1

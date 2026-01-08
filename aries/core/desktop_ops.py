@@ -811,6 +811,9 @@ class DesktopOpsController:
             "paths_validated": paths_validated,
             "allowlist_match": allowlist_match,
             "denylist_match": False,
+            "argv": call.arguments.get("argv") if isinstance(call.arguments, dict) else None,
+            "cwd": call.arguments.get("cwd") if isinstance(call.arguments, dict) else None,
+            "process_id": None,
             "start_time": start_time,
             "end_time": None,
             "cached": policy_cached,
@@ -832,6 +835,8 @@ class DesktopOpsController:
             tool_id,
             allowed_paths=allowed_paths,
         )
+        if tool_result.metadata and "process_id" in tool_result.metadata:
+            policy_entry["process_id"] = tool_result.metadata.get("process_id")
         self._record_tool_audit(
             context,
             tool,

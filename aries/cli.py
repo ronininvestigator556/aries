@@ -14,7 +14,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 MIN_PYTHON = (3, 11)
-MAX_PYTHON = (3, 15)
+MAX_PYTHON = (3, 14)
 
 
 def _ensure_supported_python(version_info: Any | None = None) -> None:
@@ -37,8 +37,8 @@ def _ensure_supported_python(version_info: Any | None = None) -> None:
         detected = ".".join(str(part) for part in current[:3])
         raise RuntimeError(
             "Unsupported Python version: "
-            f"{detected}. ARIES requires Python 3.11-3.14. "
-            "Install Python 3.11, 3.12, 3.13, or 3.14 and/or use the project virtual environment."
+            f"{detected}. ARIES requires Python 3.11-3.13. "
+            "Install Python 3.11, 3.12, or 3.13 and/or use the project virtual environment."
         )
 
 
@@ -534,6 +534,9 @@ class Aries:
         """Sanitize tool arguments for logging."""
         sanitized: dict[str, Any] = {}
         for key, value in args.items():
+            if key == "env" and isinstance(value, dict):
+                sanitized[key] = {"__keys__": sorted(str(k) for k in value.keys())}
+                continue
             if isinstance(value, str):
                 sanitized[key] = value if len(value) <= 200 else value[:200] + "...[truncated]"
             else:
